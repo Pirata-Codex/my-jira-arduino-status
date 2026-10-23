@@ -4,6 +4,7 @@
 
 Snapshot gData;
 static SemaphoreHandle_t mtx;
+static SemaphoreHandle_t netMtx;  // created in model_init(): FreeRTOS objects can't be made in global constructors
 
 void model_init() {
   mtx = xSemaphoreCreateMutex();
@@ -12,7 +13,6 @@ void model_init() {
 void model_lock() { xSemaphoreTake(mtx, portMAX_DELAY); }
 void model_unlock() { xSemaphoreGive(mtx); }
 
-static SemaphoreHandle_t netMtx;  // created in model_init(): FreeRTOS objects can't be made in global constructors
 void net_lock() { xSemaphoreTake(netMtx, portMAX_DELAY); }
 void net_unlock() { xSemaphoreGive(netMtx); }
 bool net_try_lock() { return xSemaphoreTake(netMtx, 0) == pdTRUE; }
