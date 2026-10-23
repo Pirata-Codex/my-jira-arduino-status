@@ -369,9 +369,18 @@ static void task(void*) {
         model_unlock();
         delete m;
       }
+      if (!mock && gData.mock) {
+        // Leaving demo mode: drop the demo data so a failing first fetch shows its error, not demo cards.
+        model_lock();
+        gData.sprint = SprintData();
+        gData.meet = MeetingData();
+        gData.sprint.err = "Loading from Jira...";
+        gData.mock = false;
+        gData.version++;
+        model_unlock();
+      }
       if (!mock && (all || now - lastJira > FETCH_JIRA_MS)) {
         publish(&Snapshot::sprint, fetchJira);
-        model_lock(); gData.mock = false; model_unlock();
         lastJira = now;
       }
       if (all || now - lastKuma > FETCH_KUMA_MS) { publish(&Snapshot::health, fetchKuma); lastKuma = now; }
