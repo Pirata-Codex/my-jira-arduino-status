@@ -37,7 +37,14 @@
 #define LV_USE_ARABIC_PERSIAN_CHARS 1
 #define LV_BIDI_BASE_DIR_DEF LV_BASE_DIR_AUTO
 
-#define LV_USE_LOG 0
+/* Warnings/errors to the serial monitor (callback set in jira_status.ino). */
+#define LV_USE_LOG 1
+#define LV_LOG_LEVEL LV_LOG_LEVEL_WARN
+#define LV_LOG_PRINTF 0
+
+/* A failed allocation used to freeze the screen in while(1); restart instead (the log says why). */
+#define LV_ASSERT_HANDLER_INCLUDE "esp_system.h"
+#define LV_ASSERT_HANDLER esp_restart();
 
 #endif
 #endif

@@ -4,7 +4,7 @@
 
 enum CardCat : uint8_t { CAT_TODO, CAT_PROGRESS, CAT_REVIEW, CAT_DONE };
 
-constexpr int MAX_CARDS = 40;
+constexpr int MAX_CARDS = 30;
 constexpr int MAX_MONITORS = 12;
 constexpr int MAX_MEETINGS = 10;
 

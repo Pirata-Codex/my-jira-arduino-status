@@ -21,13 +21,20 @@ static const size_t DRAW_BUF_BYTES = TFT_HOR_RES * TFT_VER_RES / 20 * 2;
 
 static uint32_t tick() { return millis(); }
 
+// LVGL warnings and errors (e.g. "malloc failed") go to the serial monitor.
+static void lvLog(lv_log_level_t level, const char* msg) { Serial.print("[lvgl] "); Serial.print(msg); }
+
 void setup() {
   Serial.begin(115200);
+  delay(200);
+  Serial.println();
+  LOG("boot, reset reason %d", (int)esp_reset_reason());
   settings_load();
   model_init();
 
   lv_init();
   lv_tick_set_cb(tick);
+  lv_log_register_print_cb(lvLog);
   void* drawBuf = heap_caps_malloc(DRAW_BUF_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
   lv_display_t* disp = lv_tft_espi_create(TFT_HOR_RES, TFT_VER_RES, drawBuf, DRAW_BUF_BYTES);
   lv_display_set_rotation(disp, SCREEN_ROTATION);
@@ -47,6 +54,7 @@ void setup() {
     ESP.restart();
   }
 
+  LOG("wifi ok, ip %s", WiFi.localIP().toString().c_str());
   configTzTime(TZ_INFO, NTP_1, NTP_2);
   web_begin();
   fetch_begin();
@@ -56,11 +64,17 @@ void setup() {
   uint32_t until = millis() + 6000;
   while (millis() < until) { lv_timer_handler(); web_loop(); delay(5); }
   ui_start_dashboard();
+  LOG("dashboard started");
 }
 
 void loop() {
   lv_timer_handler();
   web_loop();
   ui_tick();
+  static uint32_t lastBeat = 0;
+  if (millis() - lastBeat > 10000) {
+    lastBeat = millis();
+    LOG("alive, wifi %d", (int)WiFi.status());
+  }
   delay(5);
 }

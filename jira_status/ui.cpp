@@ -112,9 +112,11 @@ static String hhmm(time_t t) {
 }
 
 // Persian digits: U+06F0..U+06F9, two bytes each in UTF-8.
+// LVGL's BiDi treats them as right-to-left letters and reverses the run, so emit them reversed.
 static String faDigits(int n) {
   String in = String(n), out;
-  for (char ch : in) {
+  for (int i = in.length() - 1; i >= 0; i--) {
+    char ch = in[i];
     if (ch >= '0' && ch <= '9') {
       out += (char)0xDB;
       out += (char)(0xB0 + ch - '0');
@@ -548,18 +550,14 @@ static void renderCards() {
       lv_color_t col = catColor(c.cat, c.blocked);
       // Tinted row in the status color.
       lv_obj_t* row = box(cardList, 0, 0, 452, 38, lv_color_mix(col, C_CARD, 48));
-      lv_obj_set_style_border_color(row, lv_color_mix(col, C_CARD, 140), 0);
       lv_obj_set_style_pad_ver(row, 0, 0);
       lv_obj_set_style_radius(row, 10, 0);
-      lv_obj_t* pill = lv_obj_create(row);
-      lv_obj_remove_style_all(pill);
-      lv_obj_set_size(pill, 5, 20);
-      lv_obj_set_style_radius(pill, 3, 0);
-      lv_obj_set_style_bg_opa(pill, LV_OPA_COVER, 0);
-      lv_obj_set_style_bg_color(pill, col, 0);
-      lv_obj_align(pill, LV_ALIGN_LEFT_MID, 0, 0);
+      // Status stripe = thick left border (one object less per row; RAM is tight).
+      lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
+      lv_obj_set_style_border_width(row, 5, 0);
+      lv_obj_set_style_border_color(row, col, 0);
       lv_obj_t* key = text(row, F_BODY, col, c.key.c_str());
-      lv_obj_align(key, LV_ALIGN_LEFT_MID, 14, 0);
+      lv_obj_align(key, LV_ALIGN_LEFT_MID, 4, 0);
       lv_obj_t* title = text(row, F_BODY, c.cat == CAT_DONE ? C_MUTED : C_TEXT, c.title.c_str());
       lv_obj_set_width(title, 270);
       lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
@@ -640,6 +638,7 @@ static void renderHealth() {
 }
 
 static void renderAll(time_t now) {
+  LOG("render: %d cards, %d monitors, %d meetings", snap.sprint.count, snap.health.count, snap.meet.count);
   renderNow(now);
   renderSprint(now);
   renderCards();
@@ -725,6 +724,7 @@ static void updateBanner(time_t now) {
 // ---------- loop ----------
 
 static void showPage(int p, bool animate) {
+  LOG("page %s", PAGE_TITLES[p]);
   page = p;
   lv_screen_load_anim(screens[p], animate ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_NONE, animate ? 350 : 0, 0, false);
   lv_label_set_text(topTitle, PAGE_TITLES[p]);

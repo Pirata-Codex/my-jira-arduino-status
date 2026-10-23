@@ -22,3 +22,7 @@
 
 #define MEETING_SOON_SEC   (5 * 60)   // slim banner before start
 #define MEETING_ALERT_SEC  (2 * 60)   // pulsing banner until 2 min after start
+
+// Serial log (115200 baud): timestamp, free heap and largest free block on every line.
+#define LOG(fmt, ...) Serial.printf("[%7lu] heap %3uk blk %3uk | " fmt "\n", millis(), \
+    (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024), ##__VA_ARGS__)

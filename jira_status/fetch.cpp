@@ -314,9 +314,12 @@ static void fetchCalendar(MeetingData& d) {
 static bool timeValid() { return time(nullptr) > 1700000000; }
 
 template <typename T, typename Fn>
-static void publish(T Snapshot::*field, Fn fill) {
+static void publish(const char* name, T Snapshot::*field, Fn fill) {
+  LOG("fetch %s ...", name);
+  uint32_t t0 = millis();
   T* fresh = new T();
   fill(*fresh);
+  LOG("fetch %s %s in %lu ms %s", name, fresh->ok ? "ok" : "FAILED", millis() - t0, fresh->err.c_str());
   model_lock();
   // Keep the last good data on a failed refresh; only record the error.
   if (fresh->ok || !(gData.*field).ok) gData.*field = *fresh;
@@ -356,11 +359,11 @@ static void task(void*) {
         model_unlock();
       }
       if (!mock && (all || now - lastJira > FETCH_JIRA_MS)) {
-        publish(&Snapshot::sprint, fetchJira);
+        publish("jira", &Snapshot::sprint, fetchJira);
         lastJira = now;
       }
-      if (all || now - lastKuma > FETCH_KUMA_MS) { publish(&Snapshot::health, fetchKuma); lastKuma = now; }
-      if (!mock && (all || now - lastCal > FETCH_CALENDAR_MS)) { publish(&Snapshot::meet, fetchCalendar); lastCal = now; }
+      if (all || now - lastKuma > FETCH_KUMA_MS) { publish("kuma", &Snapshot::health, fetchKuma); lastKuma = now; }
+      if (!mock && (all || now - lastCal > FETCH_CALENDAR_MS)) { publish("calendar", &Snapshot::meet, fetchCalendar); lastCal = now; }
     }
     vTaskDelay(pdMS_TO_TICKS(1000));
   }
