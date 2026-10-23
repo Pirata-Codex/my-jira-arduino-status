@@ -68,10 +68,35 @@ void setup() {
   bool online = tryEnterprise();
   WiFiManager wm;
   wm.setConfigPortalTimeout(180);
+  // Company WiFi fields in the setup portal, for places where no normal WiFi exists.
+  // Fill these and leave the normal WiFi password empty; the board saves them and restarts.
+  WiFiManagerParameter pHead("<p><b>Company WiFi (WPA2/WPA3-Enterprise, PEAP)</b><br>"
+                             "<small>Pick the company network above, then fill these.</small></p>");
+  WiFiManagerParameter pUser("entUser", "Username (as on your laptop)", gCfg.entUser.c_str(), 64);
+  WiFiManagerParameter pPass("entPass", "Password", "", 64, "type='password'");
+  wm.addParameter(&pHead);
+  wm.addParameter(&pUser);
+  wm.addParameter(&pPass);
+  static bool portalSaved = false;
+  wm.setBreakAfterConfig(true);  // run the save callback even when the normal connect fails
+  wm.setSaveConfigCallback([] { portalSaved = true; });
   wm.setAPCallback([](WiFiManager*) {
     ui_boot("WiFi setup", "Join the WiFi \"" WIFI_SETUP_AP "\" on your phone and pick your network.");
   });
-  if (!online && !wm.autoConnect(WIFI_SETUP_AP)) {
+  if (!online) online = wm.autoConnect(WIFI_SETUP_AP);
+  if (portalSaved && strlen(pUser.getValue()) && strlen(pPass.getValue())) {
+    // The network picked in the portal is the company SSID; WiFiManager's own connect can't do PEAP.
+    gCfg.entSsid = wm.getWiFiSSID(true);
+    gCfg.entUser = pUser.getValue();
+    gCfg.entIdentity = "";
+    gCfg.entPass = pPass.getValue();
+    settings_save();
+    LOG("company wifi saved from portal: %s", gCfg.entSsid.c_str());
+    ui_boot("Company WiFi saved", "Restarting to connect...");
+    delay(1500);
+    ESP.restart();
+  }
+  if (!online) {
     ui_boot("WiFi failed", "Restarting...");
     delay(3000);
     ESP.restart();
