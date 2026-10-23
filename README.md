@@ -31,7 +31,7 @@ bar at the bottom. Only small areas animate, so it stays smooth on the ILI9488.
 
 - **Alerts:** meeting soon (amber, countdown), meeting live (red pulse, time since start), service down (red pulse,
   down/total). Several at once rotate every 4 s with a "1/2" counter.
-- **Meeting place:** a room code like `3M2` in the location, title or description is shown as the place; otherwise a
+- **Meeting place:** a room code like `3M2` or `BM4` (`[A-Za-z0-9]M[0-9]`) in the location, title or description is shown as the place; otherwise a
   Google Meet or Skyroom link; otherwise the location text.
 - **Your name** (settings page) is how F.R.I.D.A.Y. greets you.
 

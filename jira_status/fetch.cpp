@@ -305,14 +305,14 @@ static void addMeeting(MeetingData& d, const Meeting& m) {
 }
 
 // Meeting place shown on the board, in this order:
-//  1. a room code like "3M2" (digits, "M", digits) from the location, title or description;
+//  1. a room code like "3M2" or "BM4" (letters/digits, "M", digits) from the location, title or description;
 //  2. a Google Meet or Skyroom link from the location or description;
 //  3. the location text as is.
 static String findRoom(const String& s) {
   for (int i = 1; i + 1 < (int)s.length(); i++) {
-    if (s[i] != 'M' || !isdigit((uint8_t)s[i - 1]) || !isdigit((uint8_t)s[i + 1])) continue;
+    if (s[i] != 'M' || !isalnum((uint8_t)s[i - 1]) || !isdigit((uint8_t)s[i + 1])) continue;
     int a = i - 1, b = i + 1;
-    while (a > 0 && isdigit((uint8_t)s[a - 1])) a--;
+    while (a > 0 && isalnum((uint8_t)s[a - 1])) a--;
     while (b + 1 < (int)s.length() && isdigit((uint8_t)s[b + 1])) b++;
     return s.substring(a, b + 1);
   }
