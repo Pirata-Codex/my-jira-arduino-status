@@ -416,7 +416,20 @@ static void fetchCalendarUnlocked(MeetingData& d) {
   WiFiClientSecure tls;
   WiFiClient plain;
   if (!begin(http, tls, plain, gCfg.icsUrl)) { d.err = "bad url"; return; }
+  // From outside the company network the mail server answers 403 to the ESP32's default request
+  // (HTTP/1.0, "ESP32HTTPClient"); present it as an ordinary browser download instead.
+  http.useHTTP10(false);
+  http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36");
+  http.addHeader("Accept", "text/calendar,text/plain,*/*");
+  http.addHeader("Accept-Language", "en-US,en;q=0.9");
   int code = timedGet(http);
+  if (code > 0 && code != 200) {
+    // Log what the server says; a 403 page usually names the reason (WAF rule, blocked agent, ...).
+    String body = http.getString();
+    body.replace("\r", "");
+    body.replace("\n", " ");
+    LOG("calendar: HTTP %d, server says: %s", code, body.substring(0, 300).c_str());
+  }
   if (code != 200) {
     d.err = code > 0 ? "HTTP " + String(code) : String(http.errorToString(code));
     if (code < 0) {
