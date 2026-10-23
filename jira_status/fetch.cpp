@@ -357,7 +357,14 @@ static void handleIcsLine(const String& line, MeetingData& d, Meeting& cur, bool
     }
     return;
   }
-  int colon = line.indexOf(':');
+  // Name and value are split at the first ':' outside quotes: Outlook writes
+  // DTSTART;TZID="(UTC+03:30) Tehran":20261024T140000 (the timezone name has its own colon).
+  int colon = -1;
+  bool quoted = false;
+  for (int i = 0; i < (int)line.length(); i++) {
+    if (line[i] == '"') quoted = !quoted;
+    else if (line[i] == ':' && !quoted) { colon = i; break; }
+  }
   if (colon < 0) return;
   String name = line.substring(0, colon);
   String value = line.substring(colon + 1);

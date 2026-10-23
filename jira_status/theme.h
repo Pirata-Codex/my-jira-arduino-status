@@ -8,7 +8,7 @@
 #define C_CYAN    lv_color_hex(0x22D3EE)
 #define C_ICE     lv_color_hex(0x8FD8E8)
 #define C_TEXT    lv_color_hex(0xECEEF4)
-#define C_MUTED   lv_color_hex(0x5E8796)
+#define C_MUTED   lv_color_hex(0x86AABA)   // brighter than before: the mono font is thin
 #define C_LIME    lv_color_hex(0xA3E635)
 #define C_VIOLET  lv_color_hex(0xA78BFA)
 #define C_AMBER   lv_color_hex(0xF5A623)
@@ -19,9 +19,9 @@
 LV_FONT_DECLARE(vazir_14);
 LV_FONT_DECLARE(vazir_16);
 LV_FONT_DECLARE(vazir_20);
-// Share Tech Mono (HUD lettering). hud_12/16/22 fall back to Vazirmatn for Persian, then Montserrat
+// Share Tech Mono (HUD lettering). hud_14/16/22 fall back to Vazirmatn for Persian, then Montserrat
 // for icons; hud_48 holds only digits and ": % + - . /" for the clock and big numbers.
-LV_FONT_DECLARE(hud_12);
+LV_FONT_DECLARE(hud_14);
 LV_FONT_DECLARE(hud_16);
 LV_FONT_DECLARE(hud_22);
 LV_FONT_DECLARE(hud_48);
@@ -29,7 +29,7 @@ LV_FONT_DECLARE(hud_48);
 #define F_SMALL   (&vazir_14)
 #define F_BODY    (&vazir_16)
 #define F_TITLE   (&vazir_20)
-#define F_HUD     (&hud_12)
+#define F_HUD     (&hud_14)
 #define F_HUD_M   (&hud_16)
 #define F_HUD_L   (&hud_22)
 #define F_CLOCK   (&hud_48)

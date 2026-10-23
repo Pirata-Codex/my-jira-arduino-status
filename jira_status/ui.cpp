@@ -133,6 +133,19 @@ static lv_obj_t* errorText(lv_obj_t* parent, int x, int y, const char* s) {
   return l;
 }
 
+// "Software Dev-Sprint-1405-73" -> "SPRINT 1405-73" (pattern 14dd-n); other names unchanged.
+static String sprintShort(const String& name) {
+  for (int i = 0; i + 5 < (int)name.length(); i++) {
+    if (name[i] != '1' || name[i + 1] != '4' || !isdigit((uint8_t)name[i + 2]) || !isdigit((uint8_t)name[i + 3]) ||
+        name[i + 4] != '-' || !isdigit((uint8_t)name[i + 5]))
+      continue;
+    int j = i + 5;
+    while (j < (int)name.length() && isdigit((uint8_t)name[j])) j++;
+    return "SPRINT " + name.substring(i, j);
+  }
+  return name;
+}
+
 static lv_color_t catColor(CardCat c, bool blocked) {
   if (blocked) return C_AMBER;
   switch (c) {
@@ -315,7 +328,7 @@ static void ticketRow(lv_obj_t* parent, int x, int y, int w, const Card& c) {
   lv_obj_set_style_radius(pill, 10, 0);
   lv_obj_set_style_border_width(pill, 1, 0);
   lv_obj_set_style_border_color(pill, col, 0);
-  lv_obj_t* pl = hudText(pill, F_HUD, col, catName(c.cat, c.blocked));
+  lv_obj_t* pl = text(pill, F_HUD, col, catName(c.cat, c.blocked));
   lv_obj_center(pl);
   lv_obj_t* pts = hudText(r, F_HUD_M, C_MUTED, fmtPts(c.pts).c_str());
   lv_obj_align(pts, LV_ALIGN_RIGHT_MID, -12, 0);
@@ -343,12 +356,12 @@ static void buildHeader() {
   lv_anim_set_playback_duration(&a, 900);
   lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
   lv_anim_start(&a);
-  hdPhrase = hudText(header, F_HUD, C_ICE, "");
+  hdPhrase = text(header, F_HUD, C_ICE, "");
   lv_obj_set_width(hdPhrase, 170);
   lv_label_set_long_mode(hdPhrase, LV_LABEL_LONG_DOT);
-  lv_obj_set_pos(hdPhrase, 182, 11);
+  lv_obj_set_pos(hdPhrase, 182, 9);
   hdHealth = hudText(header, F_HUD, C_LIME, "");
-  lv_obj_set_pos(hdHealth, 356, 11);
+  lv_obj_set_pos(hdHealth, 356, 9);
   for (int i = 0; i < 4; i++) hdWifi[i] = rect(header, 398 + i * 5, 24 - (4 + i * 3), 3, 4 + i * 3, C_DIM);
   hdClock = hudText(header, F_HUD_M, C_TEXT, "--:--");
   lv_obj_align(hdClock, LV_ALIGN_RIGHT_MID, -10, 0);
@@ -364,7 +377,7 @@ static void buildTabBar() {
       lv_point_precise_t sep[2] = {{(int32_t)(i * 94), 10}, {(int32_t)(i * 94), 38}};
       polyline(tabBar, sep, 2, C_DIM, 1);
     }
-    tabLbl[i] = hudText(tabBar, F_HUD, C_MUTED, (String(PAGE_ICONS[i]) + " " + PAGE_TITLES[i]).c_str());
+    tabLbl[i] = text(tabBar, F_HUD, C_MUTED, (String(PAGE_ICONS[i]) + " " + PAGE_TITLES[i]).c_str());
     lv_obj_align(tabLbl[i], LV_ALIGN_TOP_MID, (i - 2) * 94, 15);
   }
   tabLine = rect(tabBar, 0, 40, 56, 2, C_CYAN);
@@ -660,7 +673,7 @@ static void renderNow(time_t now) {
   renderNowTime(now);
 
   const SprintData& s = snap.sprint;
-  lv_label_set_text(nowSprint, s.name.c_str());
+  lv_label_set_text(nowSprint, sprintShort(s.name).c_str());
   int counts[4] = {}, open = 0;
   for (int i = 0; i < s.count; i++) {
     counts[s.cards[i].cat]++;
@@ -695,7 +708,7 @@ static void renderNow(time_t now) {
 static void renderSprint(time_t now) {
   const SprintData& s = snap.sprint;
   setRing(spRing, s);
-  lv_label_set_text(spName, s.name.c_str());
+  lv_label_set_text(spName, sprintShort(s.name).c_str());
   if (s.endTs) {
     long days = (s.endTs - now + 86399) / 86400;
     lv_label_set_text(spDays, days > 0 ? (String(days) + (days == 1 ? " DAY LEFT" : " DAYS LEFT")).c_str() : "SPRINT ENDED");
