@@ -24,6 +24,28 @@ static uint32_t tick() { return millis(); }
 // LVGL warnings and errors (e.g. "malloc failed") go to the serial monitor.
 static void lvLog(lv_log_level_t level, const char* msg) { Serial.print("[lvgl] "); Serial.print(msg); }
 
+// Company WiFi (WPA2/WPA3-Enterprise, PEAP). Returns true when connected.
+static bool tryEnterprise() {
+  if (gCfg.entSsid.isEmpty() || gCfg.entUser.isEmpty()) return false;
+  ui_boot("Connecting to company WiFi", gCfg.entSsid);
+  LOG("enterprise wifi: %s as %s (CA %s)", gCfg.entSsid.c_str(), gCfg.entUser.c_str(), gCfg.entCa.length() ? "set" : "none");
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    // Reason codes: 2 AUTH_EXPIRE, 15 4WAY_HANDSHAKE_TIMEOUT, 23 802_1X_AUTH_FAILED, 201 NO_AP_FOUND, 202 AUTH_FAIL
+    LOG("wifi disconnected, reason %d", info.wifi_sta_disconnected.reason);
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
+  WiFi.mode(WIFI_STA);
+  const char* identity = gCfg.entIdentity.length() ? gCfg.entIdentity.c_str() : gCfg.entUser.c_str();
+  WiFi.begin(gCfg.entSsid.c_str(), WPA2_AUTH_PEAP, identity, gCfg.entUser.c_str(), gCfg.entPass.c_str(),
+             gCfg.entCa.length() ? gCfg.entCa.c_str() : nullptr);
+  uint32_t until = millis() + 25000;
+  while (WiFi.status() != WL_CONNECTED && millis() < until) { lv_timer_handler(); delay(100); }
+  if (WiFi.status() == WL_CONNECTED) return true;
+  LOG("enterprise wifi failed, falling back to normal wifi");
+  WiFi.disconnect(true);
+  delay(200);
+  return false;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -43,12 +65,13 @@ void setup() {
 
   ui_boot("Connecting to WiFi", "");
   WiFi.setHostname(HOSTNAME);
+  bool online = tryEnterprise();
   WiFiManager wm;
   wm.setConfigPortalTimeout(180);
   wm.setAPCallback([](WiFiManager*) {
     ui_boot("WiFi setup", "Join the WiFi \"" WIFI_SETUP_AP "\" on your phone and pick your network.");
   });
-  if (!wm.autoConnect(WIFI_SETUP_AP)) {
+  if (!online && !wm.autoConnect(WIFI_SETUP_AP)) {
     ui_boot("WiFi failed", "Restarting...");
     delay(3000);
     ESP.restart();

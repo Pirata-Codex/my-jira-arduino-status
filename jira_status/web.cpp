@@ -75,6 +75,15 @@ static void handleRoot() {
   h += field("kumaSlug", "Status page slug", gCfg.kumaSlug);
   h += F("<h2>Meetings</h2>");
   h += field("icsUrl", "Calendar .ics URL", gCfg.icsUrl, "Outlook: Settings → Calendar → Shared calendars → Publish → ICS link");
+  h += F("<h2>Company WiFi (PEAP)</h2><p><small>Tried first on every boot; the normal WiFi is the fallback. "
+         "Saving restarts the board.</small></p>");
+  h += field("entSsid", "Network name (SSID)", gCfg.entSsid, "Empty = don't use company WiFi");
+  h += field("entUser", "Username", gCfg.entUser, "As on your laptop, e.g. r.khaleghi or DOMAIN\\r.khaleghi");
+  h += field("entId", "Outer identity", gCfg.entIdentity, "Usually empty (then the username is used)");
+  h += field("entPass", "Password", "", gCfg.entPass.length() ? "A password is stored. Leave empty to keep it." : "", "password");
+  h += "<label>CA certificate (PEM, optional)<textarea name=entCa rows=5 style='width:100%;background:#1a1d27;color:#e6e8ef;"
+       "border:1px solid #2a2f3d;border-radius:8px'>" + esc(gCfg.entCa) + "</textarea>"
+       "<small>Paste -----BEGIN CERTIFICATE----- ... to verify the server. Empty = connect without checking it.</small></label>";
   h += F("<h2>Display</h2>");
   h += field("bright", "Brightness (0-255)", String(gCfg.brightness), "", "number");
   h += field("rotate", "Seconds per screen", String(gCfg.rotateSec), "", "number");
@@ -101,7 +110,20 @@ static void handleSave() {
   gCfg.brightness = constrain(arg("bright").toInt(), 10, 255);
   gCfg.rotateSec = constrain(arg("rotate").toInt(), 4, 120);
   if (arg("webPass").length()) gCfg.webPass = arg("webPass");
+  String oldEnt = gCfg.entSsid + "|" + gCfg.entUser + "|" + gCfg.entIdentity + "|" + gCfg.entPass + "|" + gCfg.entCa;
+  gCfg.entSsid = arg("entSsid");
+  gCfg.entUser = arg("entUser");
+  gCfg.entIdentity = arg("entId");
+  if (arg("entPass").length()) gCfg.entPass = arg("entPass");
+  gCfg.entCa = server.arg("entCa");
+  gCfg.entCa.trim();
+  bool wifiChanged = oldEnt != gCfg.entSsid + "|" + gCfg.entUser + "|" + gCfg.entIdentity + "|" + gCfg.entPass + "|" + gCfg.entCa;
   settings_save();
+  if (wifiChanged) {
+    server.send(200, "text/html", "<meta http-equiv=refresh content='20;url=/'>Saved. Restarting to join the company WiFi...");
+    delay(500);
+    ESP.restart();
+  }
   ui_apply_settings();
   fetch_request_refresh();
   server.sendHeader("Location", "/");
