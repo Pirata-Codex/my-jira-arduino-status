@@ -130,7 +130,7 @@ void setup() {
   }
 
   LOG("wifi ok, ip %s", WiFi.localIP().toString().c_str());
-  configTzTime(TZ_INFO, NTP_1, NTP_2);
+  configTzTime(TZ_INFO, NTP_1, NTP_2, NTP_3);
   web_begin();
 
   String ip = WiFi.localIP().toString();

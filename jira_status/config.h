@@ -13,8 +13,10 @@
 
 // Iran Standard Time, no DST.
 #define TZ_INFO "<+0330>-3:30"
-#define NTP_1 "pool.ntp.org"
-#define NTP_2 "time.google.com"
+// NTP servers, tried in order: time.ir first, then the Iran pool, then Google.
+#define NTP_1 "ntp.time.ir"
+#define NTP_2 "ir.pool.ntp.org"
+#define NTP_3 "time.google.com"
 
 #define FETCH_JIRA_MS     (2 * 60 * 1000UL)
 #define FETCH_KUMA_MS     (60 * 1000UL)
