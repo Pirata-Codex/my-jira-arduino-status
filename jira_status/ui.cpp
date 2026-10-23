@@ -31,7 +31,7 @@ static lv_chart_series_t *spSeries, *spIdeal;
 static lv_obj_t* spBurnNote;
 // Cards
 static lv_obj_t *cardView, *cardList;
-static uint32_t cardsDwellMs = 0;  // how long the cards page needs to scroll through once
+static uint32_t cardsDwellMs = 0;  // how long the cards slide needs to show every page once
 static const int CARD_VIEW_H = 232;
 // KPIs
 static lv_obj_t *kpiVal[6], *kpiLbl[6], *kpiSub[6];
@@ -333,7 +333,7 @@ static void buildCards() {
   legendItem(legend, "Done", catColor(CAT_DONE, false));
   legendItem(legend, "Blocked", C_RED);
 
-  // Clipping viewport; cardList moves up inside it like film credits.
+  // Viewport for one page of cards.
   cardView = lv_obj_create(s);
   lv_obj_remove_style_all(cardView);
   lv_obj_set_pos(cardView, 14, 72);
@@ -555,63 +555,80 @@ static void renderSprint(time_t now) {
   lv_chart_refresh(spChart);
 }
 
-static void creditsCb(void* obj, int32_t v) { lv_obj_set_y((lv_obj_t*)obj, v); }
+// The card list is shown in pages of CARDS_PER_PAGE, flipped every CARD_PAGE_MS like a departures board.
+// (A continuous scroll redraws the whole list every frame; at ~10 fps on the ILI9488 it was unreadable.)
+static const int CARDS_PER_PAGE = 5;
+static const uint32_t CARD_PAGE_MS = 5000;
+static int cardOrder[MAX_CARDS];
+static int cardOrderLen = 0, cardPage = 0;
+static lv_timer_t* cardTimer = nullptr;
 
-// Scrolls the card list up through the viewport, pauses at the end, then glides back.
-static void startCredits() {
-  lv_anim_delete(cardList, creditsCb);
-  lv_obj_set_y(cardList, 0);
-  lv_obj_update_layout(cardList);
-  int overflow = lv_obj_get_height(cardList) - CARD_VIEW_H;
-  if (overflow <= 0) { cardsDwellMs = 0; return; }
-  const uint32_t pxPerSec = 22, pause = 2000;
-  uint32_t run = overflow * 1000 / pxPerSec;
-  lv_anim_t a;
-  lv_anim_init(&a);
-  lv_anim_set_var(&a, cardList);
-  lv_anim_set_exec_cb(&a, creditsCb);
-  lv_anim_set_values(&a, 0, -overflow);
-  lv_anim_set_duration(&a, run);
-  lv_anim_set_delay(&a, pause);
-  lv_anim_set_playback_delay(&a, pause);
-  lv_anim_set_playback_duration(&a, run / 3);
-  lv_anim_set_repeat_delay(&a, pause);
-  lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-  lv_anim_set_path_cb(&a, lv_anim_path_linear);
-  lv_anim_start(&a);
-  cardsDwellMs = pause + run + pause + run / 3;
+static int cardPages() { return max(1, (cardOrderLen + CARDS_PER_PAGE - 1) / CARDS_PER_PAGE); }
+
+static void cardTitle() {
+  if (page != PG_CARDS) return;
+  if (cardPages() > 1) lv_label_set_text_fmt(topTitle, "My cards  %d/%d", cardPage + 1, cardPages());
+  else lv_label_set_text(topTitle, PAGE_TITLES[PG_CARDS]);
+}
+
+static void drawCardPage() {
+  lv_obj_clean(cardList);
+  const SprintData& s = snap.sprint;
+  if (!s.count) {
+    errorText(cardList, s.ok ? "No cards in this sprint" : ("Jira: " + s.err).c_str());
+    return;
+  }
+  int first = cardPage * CARDS_PER_PAGE;
+  for (int n = first; n < cardOrderLen && n < first + CARDS_PER_PAGE; n++) {
+    const Card& c = s.cards[cardOrder[n]];
+    lv_color_t col = catColor(c.cat, c.blocked);
+    // Tinted row in the status color.
+    lv_obj_t* row = box(cardList, 0, 0, 452, 38, lv_color_mix(col, C_CARD, 48));
+    lv_obj_set_style_pad_ver(row, 0, 0);
+    lv_obj_set_style_radius(row, 10, 0);
+    // Status stripe = thick left border (one object less per row; RAM is tight).
+    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
+    lv_obj_set_style_border_width(row, 5, 0);
+    lv_obj_set_style_border_color(row, col, 0);
+    lv_obj_t* key = text(row, F_BODY, col, c.key.c_str());
+    lv_obj_align(key, LV_ALIGN_LEFT_MID, 4, 0);
+    lv_obj_t* title = text(row, F_BODY, c.cat == CAT_DONE ? C_MUTED : C_TEXT, c.title.c_str());
+    lv_obj_set_width(title, 270);
+    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+    lv_obj_align(title, LV_ALIGN_LEFT_MID, 106, 0);
+    lv_obj_t* pts = text(row, F_SMALL, C_TEXT, (fmtPts(c.pts) + " pt").c_str());
+    lv_obj_align(pts, LV_ALIGN_RIGHT_MID, 0, 0);
+  }
+  cardTitle();
+}
+
+static void cardTimerCb(lv_timer_t*) {
+  // Not during a refresh: the dashboard (and cardList) is deleted then.
+  if (!started || page != PG_CARDS || cardPages() < 2) return;
+  cardPage = (cardPage + 1) % cardPages();
+  drawCardPage();
+}
+
+// Restart at the first page (when the cards slide is shown).
+static void startCardPages() {
+  cardPage = 0;
+  drawCardPage();
+  if (!cardTimer) cardTimer = lv_timer_create(cardTimerCb, CARD_PAGE_MS, nullptr);
+  lv_timer_reset(cardTimer);
+  cardsDwellMs = cardPages() * CARD_PAGE_MS;
 }
 
 static void renderCards() {
-  lv_obj_clean(cardList);
   const SprintData& s = snap.sprint;
   // Active work first, done last.
   static const CardCat order[] = {CAT_PROGRESS, CAT_REVIEW, CAT_TODO, CAT_DONE};
-  for (CardCat cat : order) {
-    for (int i = 0; i < s.count; i++) {
-      const Card& c = s.cards[i];
-      if (c.cat != cat) continue;
-      lv_color_t col = catColor(c.cat, c.blocked);
-      // Tinted row in the status color.
-      lv_obj_t* row = box(cardList, 0, 0, 452, 38, lv_color_mix(col, C_CARD, 48));
-      lv_obj_set_style_pad_ver(row, 0, 0);
-      lv_obj_set_style_radius(row, 10, 0);
-      // Status stripe = thick left border (one object less per row; RAM is tight).
-      lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
-      lv_obj_set_style_border_width(row, 5, 0);
-      lv_obj_set_style_border_color(row, col, 0);
-      lv_obj_t* key = text(row, F_BODY, col, c.key.c_str());
-      lv_obj_align(key, LV_ALIGN_LEFT_MID, 4, 0);
-      lv_obj_t* title = text(row, F_BODY, c.cat == CAT_DONE ? C_MUTED : C_TEXT, c.title.c_str());
-      lv_obj_set_width(title, 270);
-      lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-      lv_obj_align(title, LV_ALIGN_LEFT_MID, 106, 0);
-      lv_obj_t* pts = text(row, F_SMALL, C_TEXT, (fmtPts(c.pts) + " pt").c_str());
-      lv_obj_align(pts, LV_ALIGN_RIGHT_MID, 0, 0);
-    }
-  }
-  if (!s.count) errorText(cardList, s.ok ? "No cards in this sprint" : ("Jira: " + s.err).c_str());
-  if (page == PG_CARDS) startCredits();
+  cardOrderLen = 0;
+  for (CardCat cat : order)
+    for (int i = 0; i < s.count; i++)
+      if (s.cards[i].cat == cat) cardOrder[cardOrderLen++] = i;
+  cardsDwellMs = cardPages() * CARD_PAGE_MS;
+  if (cardPage >= cardPages()) cardPage = 0;
+  drawCardPage();
 }
 
 static void setKpi(int i, const String& label, const String& value, const String& sub, lv_color_t color = C_TEXT) {
@@ -778,7 +795,7 @@ static void showPage(int p, bool animate) {
     lv_obj_set_style_bg_color(dots[i], i == p ? C_ACCENT : C_BORDER, 0);
     lv_obj_set_width(dots[i], i == p ? 16 : 6);
   }
-  if (p == PG_CARDS) startCredits();
+  if (p == PG_CARDS) startCardPages();
   lastSwitch = millis();
 }
 
