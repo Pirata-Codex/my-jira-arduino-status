@@ -7,6 +7,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <algorithm>
+#include <esp_log.h>
 
 static volatile bool refreshNow = true;
 void fetch_request_refresh() { refreshNow = true; }
@@ -420,5 +421,7 @@ void fetch_begin() {
   // the task watchdog (it rebooted the board on the first HTTPS call). Core 0 only runs WiFi and this
   // task, so its idle watchdog is switched off; core 1 (UI) keeps its own.
   disableCore0WDT();
+  // The HTTPS client still "feeds" the watchdog for this unregistered task; that only logs a harmless error.
+  esp_log_level_set("task_wdt", ESP_LOG_NONE);
   xTaskCreatePinnedToCore(task, "fetch", 16 * 1024, nullptr, 1, nullptr, 0);
 }
