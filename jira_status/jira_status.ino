@@ -16,8 +16,8 @@
 #error "LVGL is using another lv_conf.h. Copy extras/lv_conf.h over Documents/Arduino/libraries/lv_conf.h"
 #endif
 
-// 1/10 of the screen; no PSRAM needed.
-static uint32_t drawBuf[TFT_HOR_RES * TFT_VER_RES / 10 / 2];
+// 1/10 of the screen, allocated at runtime (a static buffer doesn't fit the DRAM segment).
+static const size_t DRAW_BUF_BYTES = TFT_HOR_RES * TFT_VER_RES / 10 * 2;
 
 static uint32_t tick() { return millis(); }
 
@@ -28,7 +28,8 @@ void setup() {
 
   lv_init();
   lv_tick_set_cb(tick);
-  lv_display_t* disp = lv_tft_espi_create(TFT_HOR_RES, TFT_VER_RES, drawBuf, sizeof(drawBuf));
+  void* drawBuf = heap_caps_malloc(DRAW_BUF_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+  lv_display_t* disp = lv_tft_espi_create(TFT_HOR_RES, TFT_VER_RES, drawBuf, DRAW_BUF_BYTES);
   lv_display_set_rotation(disp, SCREEN_ROTATION);
   ui_init();
   ui_apply_settings();

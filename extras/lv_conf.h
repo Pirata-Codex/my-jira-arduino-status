@@ -6,7 +6,10 @@
 #define LV_CONF_H
 
 #define LV_COLOR_DEPTH 16
-#define LV_MEM_SIZE (56U * 1024U)
+/* Use the ESP32 heap instead of a static pool: a static pool overflows DRAM at link time. */
+#define LV_USE_STDLIB_MALLOC LV_STDLIB_CLIB
+#define LV_USE_STDLIB_STRING LV_STDLIB_CLIB
+#define LV_USE_STDLIB_SPRINTF LV_STDLIB_CLIB
 #define LV_DEF_REFR_PERIOD 20
 
 /* Display driver: LVGL's built-in TFT_eSPI glue (pins/panel come from TFT_eSPI's User_Setup.h). */
