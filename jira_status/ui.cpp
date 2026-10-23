@@ -179,23 +179,9 @@ static String mmss(long sec) {
   return b;
 }
 
-// Persian digits: U+06F0..U+06F9, two bytes each in UTF-8.
-// LVGL's BiDi treats them as right-to-left letters and reverses the run, so emit them reversed.
-static String faDigits(int n) {
-  String in = String(n), out;
-  for (int i = in.length() - 1; i >= 0; i--) {
-    char ch = in[i];
-    if (ch >= '0' && ch <= '9') {
-      out += (char)0xDB;
-      out += (char)(0xB0 + ch - '0');
-    } else {
-      out += ch;
-    }
-  }
-  return out;
-}
-
-// Persian (Jalali) date, e.g. "جمعه ۱ آبان ۱۴۰۵".
+// Persian (Jalali) date, e.g. "شنبه 2 آبان 1405".
+// Numbers are written with Latin digits: LVGL's Persian shaping mangled U+06F0..U+06F9 (a "2" showed as "۰"),
+// while Latin digits are laid out correctly inside right-to-left text.
 static String jalaliDate(const struct tm& lt) {
   static const char* months[] = {"فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
                                  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"};
@@ -215,7 +201,7 @@ static String jalaliDate(const struct tm& lt) {
   int jm, jd;
   if (days < 186) { jm = 1 + days / 31; jd = 1 + days % 31; }
   else { jm = 7 + (days - 186) / 30; jd = 1 + (days - 186) % 30; }
-  return String(weekdays[lt.tm_wday]) + " " + faDigits(jd) + " " + months[jm - 1] + " " + faDigits(jy);
+  return String(weekdays[lt.tm_wday]) + " " + String(jd) + " " + months[jm - 1] + " " + String(jy);
 }
 
 // ---------- arc reactor + segmented ring ----------
