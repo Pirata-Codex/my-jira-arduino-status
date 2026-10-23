@@ -526,6 +526,17 @@ void fetch_all(FetchProgress p, RefreshKind kind) {
       gData.mock = false;
       model_unlock();
     }
+    // Calendar first, while the heap is least fragmented: the mail server's TLS handshake is the heaviest.
+    if (gCfg.icsUrl.isEmpty()) {
+      report(STEP_CALENDAR, STEP_SKIP, "no .ics URL");
+    } else {
+      report(STEP_CALENDAR, STEP_RUN);
+      bool calOk = publish("calendar", &Snapshot::meet, fetchCalendar, err);
+      model_lock();
+      String calSum = String(gData.meet.count) + " meetings today";
+      model_unlock();
+      report(STEP_CALENDAR, calOk ? STEP_OK : STEP_FAIL, calOk ? calSum : err);
+    }
     publish("jira", &Snapshot::sprint, fetchJira, err);
   }
 
@@ -536,20 +547,8 @@ void fetch_all(FetchProgress p, RefreshKind kind) {
   model_unlock();
   report(STEP_KUMA, ok ? STEP_OK : STEP_FAIL, ok ? kumaSum : err);
 
-  if (!full) {
-    report(STEP_CALENDAR, STEP_SKIP, "unchanged");
-  } else if (settings_mock()) {
-    report(STEP_CALENDAR, STEP_OK, "demo data");
-  } else if (gCfg.icsUrl.isEmpty()) {
-    report(STEP_CALENDAR, STEP_SKIP, "no .ics URL");
-  } else {
-    report(STEP_CALENDAR, STEP_RUN);
-    ok = publish("calendar", &Snapshot::meet, fetchCalendar, err);
-    model_lock();
-    String calSum = String(gData.meet.count) + " meetings today";
-    model_unlock();
-    report(STEP_CALENDAR, ok ? STEP_OK : STEP_FAIL, ok ? calSum : err);
-  }
+  if (!full) report(STEP_CALENDAR, STEP_SKIP, "unchanged");
+  else if (settings_mock()) report(STEP_CALENDAR, STEP_OK, "demo data");
   if (full) lastFetch = millis();
   lastKuma = millis();
   progress = nullptr;
