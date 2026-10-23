@@ -1,0 +1,30 @@
+/* LVGL 9.2 config for the Jira status board.
+ * Copy this file next to the lvgl library folder:  Documents/Arduino/libraries/lv_conf.h
+ * Anything not set here uses LVGL's defaults. */
+#if 1
+#ifndef LV_CONF_H
+#define LV_CONF_H
+
+#define LV_COLOR_DEPTH 16
+#define LV_MEM_SIZE (56U * 1024U)
+#define LV_DEF_REFR_PERIOD 20
+
+/* Display driver: LVGL's built-in TFT_eSPI glue (pins/panel come from TFT_eSPI's User_Setup.h). */
+#define LV_USE_TFT_ESPI 1
+
+/* Fonts used by the UI */
+#define LV_FONT_MONTSERRAT_14 1
+#define LV_FONT_MONTSERRAT_16 1
+#define LV_FONT_MONTSERRAT_20 1
+#define LV_FONT_MONTSERRAT_28 1
+#define LV_FONT_MONTSERRAT_48 1
+#define LV_FONT_DEFAULT &lv_font_montserrat_16
+
+/* Persian/Arabic shaping + right-to-left text, for Persian card titles once a Persian font is added. */
+#define LV_USE_BIDI 1
+#define LV_USE_ARABIC_PERSIAN_CHARS 1
+
+#define LV_USE_LOG 0
+
+#endif
+#endif

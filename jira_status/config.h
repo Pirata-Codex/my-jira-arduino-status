@@ -1,0 +1,24 @@
+#pragma once
+
+// Panel is 320x480 portrait natively; LVGL rotates it to 480x320 landscape.
+#define TFT_HOR_RES 320
+#define TFT_VER_RES 480
+#define SCREEN_W 480
+#define SCREEN_H 320
+// 90 = landscape. Use LV_DISPLAY_ROTATION_270 if the picture is upside down.
+#define SCREEN_ROTATION LV_DISPLAY_ROTATION_90
+
+#define WIFI_SETUP_AP "Jira-Status-Setup"
+#define HOSTNAME "jira-status"   // http://jira-status.local
+
+// Iran Standard Time, no DST.
+#define TZ_INFO "<+0330>-3:30"
+#define NTP_1 "pool.ntp.org"
+#define NTP_2 "time.google.com"
+
+#define FETCH_JIRA_MS     (2 * 60 * 1000UL)
+#define FETCH_KUMA_MS     (60 * 1000UL)
+#define FETCH_CALENDAR_MS (5 * 60 * 1000UL)
+
+#define MEETING_SOON_SEC   (5 * 60)   // slim banner before start
+#define MEETING_ALERT_SEC  (2 * 60)   // pulsing banner until 2 min after start
