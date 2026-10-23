@@ -90,7 +90,9 @@ static bool begin(HTTPClient& http, WiFiClientSecure& tls, WiFiClient& plain, co
   return url.startsWith("https") ? http.begin(tls, url) : http.begin(plain, url);
 }
 
-static bool getJson(const String& url, const String& bearer, JsonDocument& doc, const JsonDocument* filter, String& err) {
+static bool getJson(const String& url, const String& bearer, JsonDocument& doc, const JsonDocument* filter, String& err);
+
+static bool getJsonUnlocked(const String& url, const String& bearer, JsonDocument& doc, const JsonDocument* filter, String& err) {
   HTTPClient http;
   WiFiClientSecure tls;
   WiFiClient plain;
@@ -296,7 +298,22 @@ static void handleIcsLine(const String& line, MeetingData& d, Meeting& cur, bool
   else if (name == "LOCATION") { value.replace("\\,", ","); cur.where = value.substring(0, 60); }
 }
 
+static bool getJson(const String& url, const String& bearer, JsonDocument& doc, const JsonDocument* filter, String& err) {
+  net_lock();
+  bool ok = getJsonUnlocked(url, bearer, doc, filter, err);
+  net_unlock();
+  return ok;
+}
+
+static void fetchCalendarUnlocked(MeetingData& d);
+
 static void fetchCalendar(MeetingData& d) {
+  net_lock();
+  fetchCalendarUnlocked(d);
+  net_unlock();
+}
+
+static void fetchCalendarUnlocked(MeetingData& d) {
   d = MeetingData();
   if (gCfg.icsUrl.isEmpty()) return;
   d.configured = true;

@@ -139,9 +139,13 @@ void setup() {
 }
 
 void loop() {
-  lv_timer_handler();
+  // Skip drawing while an HTTPS request runs (see net_lock); the web page keeps working.
+  if (net_try_lock()) {
+    lv_timer_handler();
+    ui_tick();
+    net_unlock();
+  }
   web_loop();
-  ui_tick();
   static uint32_t lastBeat = 0;
   if (millis() - lastBeat > 10000) {
     lastBeat = millis();
