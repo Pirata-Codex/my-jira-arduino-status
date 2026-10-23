@@ -343,6 +343,14 @@ static String meetingPlace(const String& location, const String& title, const St
   return location;
 }
 
+static String hhmmLog(time_t t) {
+  struct tm lt;
+  localtime_r(&t, &lt);
+  char b[8];
+  strftime(b, sizeof(b), "%H:%M", &lt);
+  return b;
+}
+
 static String icsDesc;  // DESCRIPTION of the event being parsed (only used for the place)
 
 static void handleIcsLine(const String& line, MeetingData& d, Meeting& cur, bool& inEvent, bool& allDay, time_t dayStart, time_t dayEnd) {
@@ -418,10 +426,15 @@ static void fetchCalendarUnlocked(MeetingData& d) {
   Meeting cur;
   bool inEvent = false, allDay = false;
   String pending;
-  uint32_t deadline = millis() + 20000;
+  size_t bytesRead = 0;
+  int total = http.getSize();  // -1 when the server sends no Content-Length
+  uint32_t t0 = millis();
+  // Outlook lists events oldest first, so today's are near the end: read the whole file.
+  uint32_t deadline = t0 + 90000;
   while ((stream.connected() || stream.available()) && millis() < deadline) {
     if (!stream.available()) { delay(5); continue; }
     String line = stream.readStringUntil('\n');
+    bytesRead += line.length() + 1;
     // Folded lines continue the previous one with a leading space.
     bool folded = line.length() && (line[0] == ' ' || line[0] == '\t');
     line.trim();
@@ -431,8 +444,19 @@ static void fetchCalendarUnlocked(MeetingData& d) {
   }
   if (pending.length()) handleIcsLine(pending, d, cur, inEvent, allDay, dayStart, dayEnd);
   http.end();
+  bool timedOut = millis() >= deadline;
+  LOG("calendar: read %u of %d bytes in %lu ms%s, %d meetings today", (unsigned)bytesRead, total,
+      millis() - t0, timedOut ? " (TIMED OUT)" : "", d.count);
 
   std::sort(d.m, d.m + d.count, [](const Meeting& a, const Meeting& b) { return a.start < b.start; });
+  for (int i = 0; i < d.count; i++)
+    LOG("  meeting %s-%s %s @ %s", hhmmLog(d.m[i].start).c_str(), hhmmLog(d.m[i].end).c_str(),
+        d.m[i].title.c_str(), d.m[i].where.c_str());
+  if (timedOut) {
+    // A cut-off file would silently miss today's events (they are at the end); report it instead.
+    d.err = "timed out after " + String(bytesRead / 1024) + " KB";
+    return;
+  }
   d.ok = true;
   d.updated = now;
 }
