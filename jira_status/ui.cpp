@@ -9,9 +9,10 @@
 // F.R.I.D.A.Y. HUD look. Behavior (pages, rotation, refresh flow, alerts) is unchanged; drawing is kept
 // cheap for the ILI9488 (~10 full frames/s): outline-only panels, no shadows, only small areas animate.
 
-enum Page { PG_NOW, PG_SPRINT, PG_CARDS, PG_KPI, PG_HEALTH, PG_COUNT };
-static const char* PAGE_TITLES[PG_COUNT] = {"PULSE", "SPRINT", "CARDS", "KPI", "HEALTH"};
-static const char* PAGE_ICONS[PG_COUNT] = {LV_SYMBOL_HOME, LV_SYMBOL_REFRESH, LV_SYMBOL_LIST, LV_SYMBOL_CHARGE, LV_SYMBOL_POWER};
+enum Page { PG_NOW, PG_AGENDA, PG_SPRINT, PG_CARDS, PG_KPI, PG_HEALTH, PG_COUNT };
+static const char* PAGE_TITLES[PG_COUNT] = {"PULSE", "AGENDA", "SPRINT", "CARDS", "KPI", "HEALTH"};
+static const char* PAGE_ICONS[PG_COUNT] = {LV_SYMBOL_HOME, LV_SYMBOL_BELL, LV_SYMBOL_REFRESH, LV_SYMBOL_LIST, LV_SYMBOL_CHARGE, LV_SYMBOL_POWER};
+static const int TAB_W = 472 / PG_COUNT;
 
 static Snapshot snap;                 // UI-side copy of gData
 static uint32_t seenVersion = UINT32_MAX;
@@ -35,6 +36,8 @@ static lv_obj_t *nowLeg[4];
 // Sprint
 static lv_obj_t *spName, *spDays, *spBars[4], *spBarLbl[4], *spChart, *spFoot, *spBurnNote;
 static lv_chart_series_t *spSeries, *spIdeal;
+// Agenda
+static lv_obj_t* agList;
 // Cards
 static lv_obj_t* cardList;
 static uint32_t cardsDwellMs = 0;  // how long the cards slide needs to show every page once
@@ -179,13 +182,12 @@ static String mmss(long sec) {
   return b;
 }
 
-// Persian (Jalali) date, e.g. "شنبه 2 آبان 1405".
+// Persian (Jalali) date, e.g. "2 آبان 1405" (no weekday: it pushed the Gregorian date out of the panel).
 // Numbers are written with Latin digits: LVGL's Persian shaping mangled U+06F0..U+06F9 (a "2" showed as "۰"),
 // while Latin digits are laid out correctly inside right-to-left text.
 static String jalaliDate(const struct tm& lt) {
   static const char* months[] = {"فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
                                  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"};
-  static const char* weekdays[] = {"یکشنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه"};
   static const int gdm[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
   int gy = lt.tm_year + 1900, gm = lt.tm_mon + 1, gd = lt.tm_mday;
   int gy2 = gm > 2 ? gy + 1 : gy;
@@ -201,7 +203,7 @@ static String jalaliDate(const struct tm& lt) {
   int jm, jd;
   if (days < 186) { jm = 1 + days / 31; jd = 1 + days % 31; }
   else { jm = 7 + (days - 186) / 30; jd = 1 + (days - 186) % 30; }
-  return String(weekdays[lt.tm_wday]) + " " + String(jd) + " " + months[jm - 1] + " " + String(jy);
+  return String(jd) + " " + months[jm - 1] + " " + String(jy);
 }
 
 // ---------- arc reactor + segmented ring ----------
@@ -360,13 +362,16 @@ static void buildTabBar() {
   lv_obj_set_style_bg_opa(tabBar, LV_OPA_COVER, 0);
   for (int i = 0; i < PG_COUNT; i++) {
     if (i) {
-      lv_point_precise_t sep[2] = {{(int32_t)(i * 94), 10}, {(int32_t)(i * 94), 38}};
+      lv_point_precise_t sep[2] = {{(int32_t)(i * TAB_W), 10}, {(int32_t)(i * TAB_W), 38}};
       polyline(tabBar, sep, 2, C_DIM, 1);
     }
     tabLbl[i] = text(tabBar, F_HUD, C_MUTED, (String(PAGE_ICONS[i]) + " " + PAGE_TITLES[i]).c_str());
-    lv_obj_align(tabLbl[i], LV_ALIGN_TOP_MID, (i - 2) * 94, 15);
+    lv_obj_set_width(tabLbl[i], TAB_W);
+    lv_obj_set_style_text_align(tabLbl[i], LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(tabLbl[i], LV_LABEL_LONG_CLIP);
+    lv_obj_set_pos(tabLbl[i], i * TAB_W, 15);
   }
-  tabLine = rect(tabBar, 0, 40, 56, 2, C_CYAN);
+  tabLine = rect(tabBar, 0, 40, 48, 2, C_CYAN);
   lv_obj_add_flag(tabBar, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -492,6 +497,11 @@ static void buildSprint() {
   lv_obj_set_pos(spBurnNote, 10, 170);
 }
 
+static void buildAgenda() {
+  lv_obj_t* s = screens[PG_AGENDA] = newScreen();
+  agList = plain(s, 6, CONTENT_Y, 468, 224);
+}
+
 static void buildCards() {
   lv_obj_t* s = screens[PG_CARDS] = newScreen();
   cardList = plain(s, 6, CONTENT_Y, 468, 224);
@@ -585,6 +595,7 @@ void ui_init() {
 
 static void buildDashboard() {
   buildNow();
+  buildAgenda();
   buildSprint();
   buildCards();
   buildKpi();
@@ -640,6 +651,9 @@ static void renderNowTime(time_t now) {
     String line = m->title + "  " + hhmm(m->start) + " · " + when + (m->where.length() ? " · " + m->where : "");
     lv_label_set_text(nowMeet, line.c_str());
     lv_obj_set_style_text_color(nowMeet, m->start - now <= MEETING_SOON_SEC ? C_AMBER : C_ICE, 0);
+  } else if (snap.meet.configured && !snap.meet.ok) {
+    lv_label_set_text(nowMeet, ("CALENDAR: " + snap.meet.err).c_str());
+    lv_obj_set_style_text_color(nowMeet, C_RED, 0);
   } else {
     lv_label_set_text(nowMeet, snap.meet.configured ? "NO MORE MEETINGS TODAY" : "CALENDAR NOT SET");
     lv_obj_set_style_text_color(nowMeet, C_MUTED, 0);
@@ -688,6 +702,46 @@ static void renderNow(time_t now) {
     int y = 0;
     if (c) { ticketRow(nowRows, 0, y, 468, *c); y += 46; }
     if (u) ticketRow(nowRows, 0, y, 468, *u);
+  }
+}
+
+// Agenda: today's meetings as rows (time, title, room or link, state). Up to 5, from the first
+// one that hasn't ended (one finished meeting stays on top for context).
+static void renderAgenda(time_t now) {
+  if (!agList) return;
+  lv_obj_clean(agList);
+  const MeetingData& d = snap.meet;
+  if (!d.configured) { errorText(agList, 6, 6, "CALENDAR NOT SET · ADD AN .ICS URL ON THE SETTINGS PAGE"); return; }
+  if (!d.ok) { errorText(agList, 6, 6, ("CALENDAR: " + d.err).c_str()); return; }
+  if (!d.count) { errorText(agList, 6, 6, "NO MEETINGS TODAY"); return; }
+  int first = 0;
+  while (first < d.count && d.m[first].end <= now) first++;
+  first = max(0, min(first - 1, d.count - 5));
+  const Meeting* next = nextMeeting(now);
+  for (int i = first, row = 0; i < d.count && row < 5; i++, row++) {
+    const Meeting& m = d.m[i];
+    bool past = m.end <= now, live = m.start <= now && now < m.end;
+    lv_color_t col = past ? C_MUTED : live ? C_RED : &m == next ? C_AMBER : C_ICE;
+    lv_obj_t* r = panel(agList, 0, row * 45, 468, 42, 6, live ? C_RED : C_LINE);
+    rect(r, 8, 10, 3, 22, col);
+    lv_obj_set_pos(hudText(r, F_HUD_M, past ? C_MUTED : C_TEXT, hhmm(m.start).c_str()), 18, 2);
+    lv_obj_set_pos(hudText(r, F_HUD, C_MUTED, hhmm(m.end).c_str()), 18, 21);
+    lv_obj_t* title = text(r, F_SMALL, past ? C_MUTED : C_TEXT, m.title.c_str());
+    lv_obj_set_width(title, 268);
+    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(title, 80, 1);
+    lv_obj_t* where = hudText(r, F_HUD, C_CYAN, m.where.length() ? m.where.c_str() : "-");
+    lv_obj_set_width(where, 268);
+    lv_label_set_long_mode(where, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(where, 80, 22);
+    long mins = (m.start - now) / 60;
+    String state = past ? String("DONE") : live ? String("LIVE")
+                 : mins >= 60 ? "IN " + String(mins / 60) + "H" : "IN " + String(max(1L, mins)) + "M";
+    lv_obj_t* pill = plain(r, 468 - 96, 11, 84, 20);
+    lv_obj_set_style_radius(pill, 10, 0);
+    lv_obj_set_style_border_width(pill, 1, 0);
+    lv_obj_set_style_border_color(pill, col, 0);
+    lv_obj_center(text(pill, F_HUD, col, state.c_str()));
   }
 }
 
@@ -760,8 +814,8 @@ static lv_timer_t* cardTimer = nullptr;
 static int cardPages() { return max(1, (cardOrderLen + CARDS_PER_PAGE - 1) / CARDS_PER_PAGE); }
 
 static void cardTitle() {
-  String t = String(PAGE_ICONS[PG_CARDS]) + " " + PAGE_TITLES[PG_CARDS];
-  if (cardPages() > 1) t += " " + String(cardPage + 1) + "/" + String(cardPages());
+  String t = cardPages() > 1 ? String(PAGE_TITLES[PG_CARDS]) + " " + String(cardPage + 1) + "/" + String(cardPages())
+                             : String(PAGE_ICONS[PG_CARDS]) + " " + PAGE_TITLES[PG_CARDS];
   lv_label_set_text(tabLbl[PG_CARDS], t.c_str());
 }
 
@@ -878,6 +932,7 @@ static void renderHealth() {
 static void renderAll(time_t now) {
   LOG("render: %d cards, %d monitors, %d meetings", snap.sprint.count, snap.health.count, snap.meet.count);
   renderNow(now);
+  renderAgenda(now);
   renderSprint(now);
   renderCards();
   renderKpi();
@@ -1049,7 +1104,7 @@ static void showPage(int p, bool animate) {
   page = p;
   lv_screen_load_anim(screens[p], animate ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_NONE, animate ? 250 : 0, 0, false);
   for (int i = 0; i < PG_COUNT; i++) lv_obj_set_style_text_color(tabLbl[i], i == p ? C_CYAN : C_MUTED, 0);
-  lv_obj_set_x(tabLine, p * 94 + 19);
+  lv_obj_set_x(tabLine, p * TAB_W + (TAB_W - 48) / 2);
   if (p == PG_CARDS) startCardPages();
   else cardTitle();
   lastSwitch = millis();
@@ -1094,7 +1149,10 @@ void ui_tick() {
     lv_label_set_text(nowJalali, jalaliDate(lt).c_str());
     updateBanner(now);
     updateHeader(now, lt);
-    if (lt.tm_sec == 0) renderNowTime(now);  // meeting countdown and "now" marker
+    if (lt.tm_sec == 0) {  // meeting countdown, "now" marker, agenda states
+      renderNowTime(now);
+      renderAgenda(now);
+    }
   }
 
   if (millis() - lastSwitch >= pageDwellMs(page))
@@ -1116,6 +1174,7 @@ void ui_refresh(RefreshKind kind) {
       lv_obj_delete(screens[i]);
       screens[i] = nullptr;
     }
+    agList = nullptr;
     dashboardBuilt = false;
   }
   lv_refr_now(nullptr);

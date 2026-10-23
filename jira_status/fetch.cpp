@@ -402,7 +402,17 @@ static void fetchCalendarUnlocked(MeetingData& d) {
   WiFiClient plain;
   if (!begin(http, tls, plain, gCfg.icsUrl)) { d.err = "bad url"; return; }
   int code = timedGet(http);
-  if (code != 200) { d.err = "HTTP " + String(code); http.end(); return; }
+  if (code != 200) {
+    d.err = code > 0 ? "HTTP " + String(code) : String(http.errorToString(code));
+    if (code < 0) {
+      char tlsErr[100] = "";
+      if (gCfg.icsUrl.startsWith("https")) tls.lastError(tlsErr, sizeof(tlsErr));
+      if (*tlsErr) d.err += String(" / tls: ") + tlsErr;
+      d.err += " / heap " + String(ESP.getFreeHeap() / 1024) + "k, block " + String(ESP.getMaxAllocHeap() / 1024) + "k";
+    }
+    http.end();
+    return;
+  }
 
   WiFiClient& stream = http.getStream();
   Meeting cur;
