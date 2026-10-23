@@ -132,9 +132,11 @@ static CardCat categorize(const String& statusName, const char* catKey, bool& bl
 
 static int jiraCount(const String& jql, String& err) {
   if (jql.isEmpty()) return -1;
+  JsonDocument filter;
+  filter["total"] = true;
   JsonDocument doc;
-  String url = trimSlash(gCfg.jiraUrl) + "/rest/api/2/search?maxResults=0&jql=" + urlEncode(jql);
-  if (!getJson(url, gCfg.jiraPat, doc, nullptr, err)) return -1;
+  String url = trimSlash(gCfg.jiraUrl) + "/rest/api/2/search?maxResults=0&fields=key&jql=" + urlEncode(jql);
+  if (!getJson(url, gCfg.jiraPat, doc, &filter, err)) return -1;
   return doc["total"] | -1;
 }
 
@@ -171,21 +173,47 @@ static void fetchJira(SprintData& s) {
     if (c.cat == CAT_DONE) s.ptsDone += c.pts;
   }
 
+  // The extra calls below can fail on their own (each one is a new TLS handshake and RAM is tight).
+  // Then keep the last good value instead of blanking the burndown or a KPI tile.
+  model_lock();
+  String prevName = gData.sprint.name;
+  time_t prevStart = gData.sprint.startTs, prevEnd = gData.sprint.endTs;
+  int prevKpi1 = gData.sprint.kpi1, prevKpi2 = gData.sprint.kpi2;
+  bool prevReal = !gData.mock;
+  model_unlock();
+
   if (gCfg.boardId.length()) {
+    JsonDocument spFilter;
+    JsonObject sv = spFilter["values"][0].to<JsonObject>();
+    sv["name"] = true;
+    sv["startDate"] = true;
+    sv["endDate"] = true;
     JsonDocument sp;
     String err;
-    if (getJson(base + "/rest/agile/1.0/board/" + gCfg.boardId + "/sprint?state=active", gCfg.jiraPat, sp, nullptr, err)) {
+    if (getJson(base + "/rest/agile/1.0/board/" + gCfg.boardId + "/sprint?state=active", gCfg.jiraPat, sp, &spFilter, err)) {
       JsonObject v = sp["values"][0];
       s.name = v["name"] | "";
       s.startTs = parseIso(v["startDate"]);
       s.endTs = parseIso(v["endDate"]);
+    } else {
+      LOG("jira sprint dates failed: %s (keeping last)", err.c_str());
+      if (prevReal) { s.name = prevName; s.startTs = prevStart; s.endTs = prevEnd; }
     }
   }
   if (s.name.isEmpty()) s.name = "Current sprint";
 
   String err;
   s.kpi1 = jiraCount(gCfg.kpi1Jql, err);
+  if (s.kpi1 < 0 && gCfg.kpi1Jql.length()) {
+    LOG("jira kpi1 failed: %s (keeping last)", err.c_str());
+    if (prevReal) s.kpi1 = prevKpi1;
+  }
+  err = "";
   s.kpi2 = jiraCount(gCfg.kpi2Jql, err);
+  if (s.kpi2 < 0 && gCfg.kpi2Jql.length()) {
+    LOG("jira kpi2 failed: %s (keeping last)", err.c_str());
+    if (prevReal) s.kpi2 = prevKpi2;
+  }
   s.ok = true;
   s.updated = time(nullptr);
 }
