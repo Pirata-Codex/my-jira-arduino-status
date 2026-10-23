@@ -72,8 +72,3 @@ void model_lock();
 void model_unlock();
 void model_fill_mock(Snapshot& s);
 
-// Held by the fetch task during each HTTPS request. The UI does not draw meanwhile, so LVGL and
-// the TLS handshake never compete for the (small) heap at the same time.
-void net_lock();
-void net_unlock();
-bool net_try_lock();

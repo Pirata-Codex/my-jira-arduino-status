@@ -128,24 +128,24 @@ void setup() {
   LOG("wifi ok, ip %s", WiFi.localIP().toString().c_str());
   configTzTime(TZ_INFO, NTP_1, NTP_2);
   web_begin();
-  fetch_begin();
 
   String ip = WiFi.localIP().toString();
   ui_boot("Connected", "Settings: http://" + ip + "  (or http://" HOSTNAME ".local)\nUser admin, password " + gCfg.webPass);
   uint32_t until = millis() + 6000;
-  while (millis() < until) { lv_timer_handler(); web_loop(); delay(5); }
-  ui_start_dashboard();
-  LOG("dashboard started");
+  // Show the address, and wait for the clock (NTP) before the first refresh.
+  while (millis() < until || (time(nullptr) < 1700000000 && millis() < until + 15000)) {
+    lv_timer_handler();
+    web_loop();
+    delay(5);
+  }
+  ui_refresh();
 }
 
 void loop() {
-  // Skip drawing while an HTTPS request runs (see net_lock); the web page keeps working.
-  if (net_try_lock()) {
-    lv_timer_handler();
-    ui_tick();
-    net_unlock();
-  }
+  lv_timer_handler();
+  ui_tick();
   web_loop();
+  if (fetch_due()) ui_refresh();
   static uint32_t lastBeat = 0;
   if (millis() - lastBeat > 10000) {
     lastBeat = millis();

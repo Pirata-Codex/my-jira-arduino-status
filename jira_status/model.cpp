@@ -4,18 +4,13 @@
 
 Snapshot gData;
 static SemaphoreHandle_t mtx;
-static SemaphoreHandle_t netMtx;  // created in model_init(): FreeRTOS objects can't be made in global constructors
 
 void model_init() {
   mtx = xSemaphoreCreateMutex();
-  netMtx = xSemaphoreCreateMutex();
 }
 void model_lock() { xSemaphoreTake(mtx, portMAX_DELAY); }
 void model_unlock() { xSemaphoreGive(mtx); }
 
-void net_lock() { xSemaphoreTake(netMtx, portMAX_DELAY); }
-void net_unlock() { xSemaphoreGive(netMtx); }
-bool net_try_lock() { return xSemaphoreTake(netMtx, 0) == pdTRUE; }
 
 static void card(SprintData& s, const char* key, const char* title, const char* status, CardCat cat, float pts, bool blocked = false, int doneDaysAgo = 0) {
   if (s.count >= MAX_CARDS) return;

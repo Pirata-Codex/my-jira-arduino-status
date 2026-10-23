@@ -15,6 +15,7 @@ struct Settings {
   String webPass;     // settings page / OTA password (user "admin")
   uint8_t brightness; // 0..255
   uint16_t rotateSec; // seconds per screen
+  uint16_t refreshMin; // minutes between data refreshes
   // Company WiFi, WPA2/WPA3-Enterprise with PEAP. Tried before the normal (WiFiManager) WiFi.
   String entSsid, entIdentity, entUser, entPass;
   String entCa;        // optional CA certificate (PEM) to verify the RADIUS server

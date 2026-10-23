@@ -7,10 +7,15 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <algorithm>
-#include <esp_log.h>
 
 static volatile bool refreshNow = true;
+static uint32_t lastFetch = 0;
+static FetchProgress progress = nullptr;
 void fetch_request_refresh() { refreshNow = true; }
+
+static void report(FetchStep step, StepState state, const String& detail = "") {
+  if (progress) progress(step, state, detail);
+}
 
 // ---------- helpers ----------
 
@@ -93,13 +98,10 @@ static bool begin(HTTPClient& http, WiFiClientSecure& tls, WiFiClient& plain, co
 
 static bool getJson(const String& url, const String& bearer, JsonDocument& doc, const JsonDocument* filter, String& err);
 
-// Connect + TLS handshake + headers is the RAM-hungry part; the UI pauses drawing only for that.
-static int lockedGet(HTTPClient& http) {
-  net_lock();
+static int timedGet(HTTPClient& http) {
   uint32_t t0 = millis();
   int code = http.GET();
-  net_unlock();
-  LOG("  GET -> %d, UI paused %lu ms", code, millis() - t0);
+  LOG("  GET -> %d in %lu ms", code, millis() - t0);
   return code;
 }
 
@@ -110,7 +112,7 @@ static bool getJsonUnlocked(const String& url, const String& bearer, JsonDocumen
   if (!begin(http, tls, plain, url)) { err = "bad url"; return false; }
   if (bearer.length()) http.addHeader("Authorization", "Bearer " + bearer);
   http.addHeader("Accept", "application/json");
-  int code = lockedGet(http);
+  int code = timedGet(http);
   if (code != 200) {
     err = code > 0 ? "HTTP " + String(code) : String(http.errorToString(code));
     if (code < 0) {
@@ -170,7 +172,13 @@ static void fetchJira(SprintData& s) {
   if (gCfg.spField.length()) fields += "," + gCfg.spField;
   String url = base + "/rest/api/2/search?maxResults=" + String(MAX_CARDS) + "&fields=" + fields + "&jql=" + urlEncode(gCfg.jql);
   JsonDocument doc;
-  if (!getJson(url, gCfg.jiraPat, doc, &filter, s.err)) return;
+  report(STEP_CARDS, STEP_RUN);
+  if (!getJson(url, gCfg.jiraPat, doc, &filter, s.err)) {
+    report(STEP_CARDS, STEP_FAIL, s.err);
+    report(STEP_SPRINT, STEP_SKIP);
+    report(STEP_KPI, STEP_SKIP);
+    return;
+  }
 
   for (JsonObject issue : doc["issues"].as<JsonArray>()) {
     if (s.count >= MAX_CARDS) break;
@@ -186,6 +194,8 @@ static void fetchJira(SprintData& s) {
     if (c.cat == CAT_DONE) s.ptsDone += c.pts;
   }
 
+  report(STEP_CARDS, STEP_OK, String(s.count) + " cards, " + String(s.ptsDone, 1) + " / " + String(s.ptsTotal, 1) + " pts");
+
   // The extra calls below can fail on their own (each one is a new TLS handshake and RAM is tight).
   // Then keep the last good value instead of blanking the burndown or a KPI tile.
   model_lock();
@@ -195,7 +205,9 @@ static void fetchJira(SprintData& s) {
   bool prevReal = !gData.mock;
   model_unlock();
 
+  if (!gCfg.boardId.length()) report(STEP_SPRINT, STEP_SKIP, "no board id");
   if (gCfg.boardId.length()) {
+    report(STEP_SPRINT, STEP_RUN);
     JsonDocument spFilter;
     JsonObject sv = spFilter["values"][0].to<JsonObject>();
     sv["name"] = true;
@@ -208,21 +220,28 @@ static void fetchJira(SprintData& s) {
       s.name = v["name"] | "";
       s.startTs = parseIso(v["startDate"]);
       s.endTs = parseIso(v["endDate"]);
+      report(STEP_SPRINT, STEP_OK, s.name);
     } else {
+      report(STEP_SPRINT, STEP_FAIL, err);
       LOG("jira sprint dates failed: %s (keeping last)", err.c_str());
       if (prevReal) { s.name = prevName; s.startTs = prevStart; s.endTs = prevEnd; }
     }
   }
   if (s.name.isEmpty()) s.name = "Current sprint";
 
-  String err;
+  report(STEP_KPI, STEP_RUN);
+  String err, kpiErr;
   s.kpi1 = jiraCount(gCfg.kpi1Jql, err);
+  if (s.kpi1 < 0 && gCfg.kpi1Jql.length()) kpiErr = err;
   if (s.kpi1 < 0 && gCfg.kpi1Jql.length()) {
     LOG("jira kpi1 failed: %s (keeping last)", err.c_str());
     if (prevReal) s.kpi1 = prevKpi1;
   }
   err = "";
   s.kpi2 = jiraCount(gCfg.kpi2Jql, err);
+  if (s.kpi2 < 0 && gCfg.kpi2Jql.length()) kpiErr = err;
+  if (kpiErr.length()) report(STEP_KPI, STEP_FAIL, kpiErr);
+  else report(STEP_KPI, STEP_OK, gCfg.kpi1Label + " " + String(s.kpi1) + " · " + gCfg.kpi2Label + " " + String(s.kpi2));
   if (s.kpi2 < 0 && gCfg.kpi2Jql.length()) {
     LOG("jira kpi2 failed: %s (keeping last)", err.c_str());
     if (prevReal) s.kpi2 = prevKpi2;
@@ -332,7 +351,7 @@ static void fetchCalendarUnlocked(MeetingData& d) {
   WiFiClientSecure tls;
   WiFiClient plain;
   if (!begin(http, tls, plain, gCfg.icsUrl)) { d.err = "bad url"; return; }
-  int code = lockedGet(http);
+  int code = timedGet(http);
   if (code != 200) { d.err = "HTTP " + String(code); http.end(); return; }
 
   WiFiClient& stream = http.getStream();
@@ -358,73 +377,81 @@ static void fetchCalendarUnlocked(MeetingData& d) {
   d.updated = now;
 }
 
-// ---------- task ----------
+// ---------- refresh ----------
 
 static bool timeValid() { return time(nullptr) > 1700000000; }
 
+// Fills a fresh copy and swaps it in; on failure keeps the last good data and only records the error.
 template <typename T, typename Fn>
-static void publish(const char* name, T Snapshot::*field, Fn fill) {
+static bool publish(const char* name, T Snapshot::*field, Fn fill, String& err) {
   LOG("fetch %s ...", name);
   uint32_t t0 = millis();
   T* fresh = new T();
   fill(*fresh);
-  LOG("fetch %s %s in %lu ms %s", name, fresh->ok ? "ok" : "FAILED", millis() - t0, fresh->err.c_str());
+  bool ok = fresh->ok;
+  err = fresh->err;
+  LOG("fetch %s %s in %lu ms %s", name, ok ? "ok" : "FAILED", millis() - t0, err.c_str());
   model_lock();
-  // Keep the last good data on a failed refresh; only record the error.
-  if (fresh->ok || !(gData.*field).ok) gData.*field = *fresh;
+  if (ok || !(gData.*field).ok) gData.*field = *fresh;
   else (gData.*field).err = fresh->err;
   gData.version++;
   model_unlock();
   delete fresh;
+  return ok;
 }
 
-static void task(void*) {
-  uint32_t lastJira = 0, lastKuma = 0, lastCal = 0;
-  for (;;) {
-    if (WiFi.status() == WL_CONNECTED && timeValid()) {
-      bool all = refreshNow;
-      refreshNow = false;
-      uint32_t now = millis();
-      bool mock = settings_mock();
-      if (mock && (all || !gData.mock)) {
-        Snapshot* m = new Snapshot();
-        model_fill_mock(*m);
-        model_lock();
-        gData.sprint = m->sprint;
-        gData.meet = m->meet;
-        gData.mock = true;
-        gData.version++;
-        model_unlock();
-        delete m;
-      }
-      if (!mock && gData.mock) {
-        // Leaving demo mode: drop the demo data so a failing first fetch shows its error, not demo cards.
-        model_lock();
-        gData.sprint = SprintData();
-        gData.meet = MeetingData();
-        gData.sprint.err = "Loading from Jira...";
-        gData.mock = false;
-        gData.version++;
-        model_unlock();
-      }
-      if (!mock && (all || now - lastJira > FETCH_JIRA_MS)) {
-        publish("jira", &Snapshot::sprint, fetchJira);
-        lastJira = now;
-      }
-      if (all || now - lastKuma > FETCH_KUMA_MS) { publish("kuma", &Snapshot::health, fetchKuma); lastKuma = now; }
-      if (!mock && (all || now - lastCal > FETCH_CALENDAR_MS)) { publish("calendar", &Snapshot::meet, fetchCalendar); lastCal = now; }
+bool fetch_due() {
+  if (WiFi.status() != WL_CONNECTED || !timeValid()) return false;
+  return refreshNow || millis() - lastFetch >= gCfg.refreshMin * 60000UL;
+}
+
+void fetch_all(FetchProgress p) {
+  progress = p;
+  refreshNow = false;
+  String err;
+
+  if (settings_mock()) {
+    Snapshot* m = new Snapshot();
+    model_fill_mock(*m);
+    model_lock();
+    gData.sprint = m->sprint;
+    gData.meet = m->meet;
+    gData.mock = true;
+    gData.version++;
+    model_unlock();
+    delete m;
+    for (int i = STEP_CARDS; i <= STEP_KPI; i++) report((FetchStep)i, STEP_OK, "demo data");
+  } else {
+    if (gData.mock) {
+      // Leaving demo mode: drop the demo data so a failing first fetch shows its error, not demo cards.
+      model_lock();
+      gData.sprint = SprintData();
+      gData.meet = MeetingData();
+      gData.mock = false;
+      model_unlock();
     }
-    vTaskDelay(pdMS_TO_TICKS(1000));
+    publish("jira", &Snapshot::sprint, fetchJira, err);
   }
-}
 
-void fetch_begin() {
-  // TLS needs a deep stack. Core 0 keeps network work away from the UI loop on core 1.
-  // The TLS handshake is seconds of uninterrupted math, which keeps the core-0 idle task from feeding
-  // the task watchdog (it rebooted the board on the first HTTPS call). Core 0 only runs WiFi and this
-  // task, so its idle watchdog is switched off; core 1 (UI) keeps its own.
-  disableCore0WDT();
-  // The HTTPS client still "feeds" the watchdog for this unregistered task; that only logs a harmless error.
-  esp_log_level_set("task_wdt", ESP_LOG_NONE);
-  xTaskCreatePinnedToCore(task, "fetch", 16 * 1024, nullptr, 1, nullptr, 0);
+  report(STEP_KUMA, STEP_RUN);
+  bool ok = publish("kuma", &Snapshot::health, fetchKuma, err);
+  model_lock();
+  String kumaSum = String(gData.health.up) + " / " + String(gData.health.count) + " up";
+  model_unlock();
+  report(STEP_KUMA, ok ? STEP_OK : STEP_FAIL, ok ? kumaSum : err);
+
+  if (settings_mock()) {
+    report(STEP_CALENDAR, STEP_OK, "demo data");
+  } else if (gCfg.icsUrl.isEmpty()) {
+    report(STEP_CALENDAR, STEP_SKIP, "no .ics URL");
+  } else {
+    report(STEP_CALENDAR, STEP_RUN);
+    ok = publish("calendar", &Snapshot::meet, fetchCalendar, err);
+    model_lock();
+    String calSum = String(gData.meet.count) + " meetings today";
+    model_unlock();
+    report(STEP_CALENDAR, ok ? STEP_OK : STEP_FAIL, ok ? calSum : err);
+  }
+  lastFetch = millis();
+  progress = nullptr;
 }

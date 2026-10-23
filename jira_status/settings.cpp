@@ -24,6 +24,7 @@ void settings_load() {
   gCfg.webPass = prefs.getString("webPass", def);
   gCfg.brightness = prefs.getUChar("bright", 200);
   gCfg.rotateSec = prefs.getUShort("rotate", 12);
+  gCfg.refreshMin = prefs.getUShort("refresh", 15);
   gCfg.entSsid = prefs.getString("entSsid", "");
   gCfg.entIdentity = prefs.getString("entId", "");
   gCfg.entUser = prefs.getString("entUser", "");
@@ -49,6 +50,7 @@ void settings_save() {
   prefs.putString("webPass", gCfg.webPass);
   prefs.putUChar("bright", gCfg.brightness);
   prefs.putUShort("rotate", gCfg.rotateSec);
+  prefs.putUShort("refresh", gCfg.refreshMin);
   prefs.putString("entSsid", gCfg.entSsid);
   prefs.putString("entId", gCfg.entIdentity);
   prefs.putString("entUser", gCfg.entUser);

@@ -4,6 +4,7 @@
 #include "model.h"
 #include "settings.h"
 #include <WiFi.h>
+#include "fetch.h"
 
 enum Page { PG_NOW, PG_SPRINT, PG_CARDS, PG_KPI, PG_HEALTH, PG_COUNT };
 static const char* PAGE_TITLES[PG_COUNT] = {"Now", "Sprint", "My cards", "KPIs", "Health"};
@@ -375,6 +376,42 @@ static void buildHealth() {
   lv_obj_remove_flag(hlGrid, LV_OBJ_FLAG_SCROLLABLE);
 }
 
+// ---------- refresh screen ----------
+
+static lv_obj_t* loadScreen;
+static lv_obj_t *loadIcon[STEP_COUNT], *loadDetail[STEP_COUNT], *loadTitle;
+static bool dashboardBuilt = false;
+
+static void buildLoading() {
+  static const char* names[STEP_COUNT] = {"Jira cards", "Sprint dates", "KPI queries", "Uptime Kuma", "Calendar"};
+  loadScreen = newScreen();
+  loadTitle = text(loadScreen, F_TITLE, C_TEXT, "Refreshing data");
+  lv_obj_set_pos(loadTitle, 24, 22);
+  for (int i = 0; i < STEP_COUNT; i++) {
+    lv_obj_t* row = box(loadScreen, 20, 62 + i * 50, 440, 44);
+    lv_obj_set_style_pad_ver(row, 0, 0);
+    loadIcon[i] = text(row, F_TITLE, C_MUTED, LV_SYMBOL_DUMMY);
+    lv_obj_align(loadIcon[i], LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t* name = text(row, F_BODY, C_TEXT, names[i]);
+    lv_obj_align(name, LV_ALIGN_LEFT_MID, 32, 0);
+    loadDetail[i] = text(row, F_SMALL, C_MUTED, "");
+    lv_obj_set_width(loadDetail[i], 250);
+    lv_label_set_long_mode(loadDetail[i], LV_LABEL_LONG_DOT);
+    lv_obj_set_style_text_align(loadDetail[i], LV_TEXT_ALIGN_RIGHT, 0);
+    lv_obj_align(loadDetail[i], LV_ALIGN_RIGHT_MID, 0, 0);
+  }
+}
+
+static void onProgress(FetchStep step, StepState state, const String& detail) {
+  static const char* icons[] = {LV_SYMBOL_DUMMY, LV_SYMBOL_REFRESH, LV_SYMBOL_OK, LV_SYMBOL_CLOSE, LV_SYMBOL_MINUS};
+  lv_color_t colors[] = {C_MUTED, C_ACCENT, C_GREEN, C_RED, C_MUTED};
+  lv_label_set_text(loadIcon[step], icons[state]);
+  lv_obj_set_style_text_color(loadIcon[step], colors[state], 0);
+  lv_label_set_text(loadDetail[step], state == STEP_RUN ? "loading..." : detail.c_str());
+  lv_obj_set_style_text_color(loadDetail[step], state == STEP_FAIL ? C_RED : C_MUTED, 0);
+  lv_refr_now(nullptr);  // draw now: the next fetch blocks the loop
+}
+
 void ui_init() {
   bootScreen = newScreen();
   lv_obj_t* logo = text(bootScreen, F_HUGE, C_ACCENT, LV_SYMBOL_LIST);
@@ -387,13 +424,20 @@ void ui_init() {
   lv_obj_align(bootDetail, LV_ALIGN_CENTER, 0, 50);
   lv_screen_load(bootScreen);
 
+  buildLoading();
+  buildTopBar();
+  buildBanner();
+}
+
+static void buildDashboard() {
   buildNow();
   buildSprint();
   buildCards();
   buildKpi();
   buildHealth();
-  buildTopBar();
-  buildBanner();
+  dashboardBuilt = true;
+  bannerMode = -1;
+  cardsDwellMs = 0;
 }
 
 void ui_boot(const String& title, const String& detail) {
@@ -742,12 +786,6 @@ static uint32_t pageDwellMs(int p) {
   return p == PG_CARDS ? max(base, cardsDwellMs) : base;
 }
 
-void ui_start_dashboard() {
-  started = true;
-  lv_obj_remove_flag(topBar, LV_OBJ_FLAG_HIDDEN);
-  showPage(PG_NOW, false);
-  ui_apply_settings();
-}
 
 void ui_apply_settings() {
 #ifdef TFT_BL
@@ -788,3 +826,42 @@ void ui_tick() {
   if (millis() - lastSwitch >= pageDwellMs(page))
     showPage((page + 1) % PG_COUNT, true);
 }
+
+void ui_refresh() {
+  LOG("refresh: start");
+  started = false;
+  showBanner(BN_NONE, "", "");
+  lv_obj_add_flag(topBar, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(loadTitle, "Refreshing data");
+  for (int i = 0; i < STEP_COUNT; i++) onProgress((FetchStep)i, STEP_WAIT, "");
+  lv_screen_load(loadScreen);
+  // Free every dashboard object so the HTTPS handshakes get the RAM.
+  if (dashboardBuilt) {
+    for (int i = 0; i < PG_COUNT; i++) {
+      lv_obj_delete(screens[i]);
+      screens[i] = nullptr;
+    }
+    dashboardBuilt = false;
+  }
+  lv_refr_now(nullptr);
+  LOG("refresh: dashboard freed");
+
+  fetch_all(onProgress);
+
+  lv_label_set_text(loadTitle, LV_SYMBOL_OK "  Data ready");
+  lv_refr_now(nullptr);
+  uint32_t until = millis() + 1500;
+  while (millis() < until) { lv_timer_handler(); delay(5); }
+
+  buildDashboard();
+  model_lock();
+  snap = gData;
+  seenVersion = gData.version;
+  model_unlock();
+  renderAll(time(nullptr));
+  started = true;
+  lv_obj_remove_flag(topBar, LV_OBJ_FLAG_HIDDEN);
+  showPage(PG_NOW, false);
+  LOG("refresh: done");
+}
+
