@@ -93,6 +93,16 @@ static bool begin(HTTPClient& http, WiFiClientSecure& tls, WiFiClient& plain, co
 
 static bool getJson(const String& url, const String& bearer, JsonDocument& doc, const JsonDocument* filter, String& err);
 
+// Connect + TLS handshake + headers is the RAM-hungry part; the UI pauses drawing only for that.
+static int lockedGet(HTTPClient& http) {
+  net_lock();
+  uint32_t t0 = millis();
+  int code = http.GET();
+  net_unlock();
+  LOG("  GET -> %d, UI paused %lu ms", code, millis() - t0);
+  return code;
+}
+
 static bool getJsonUnlocked(const String& url, const String& bearer, JsonDocument& doc, const JsonDocument* filter, String& err) {
   HTTPClient http;
   WiFiClientSecure tls;
@@ -100,7 +110,7 @@ static bool getJsonUnlocked(const String& url, const String& bearer, JsonDocumen
   if (!begin(http, tls, plain, url)) { err = "bad url"; return false; }
   if (bearer.length()) http.addHeader("Authorization", "Bearer " + bearer);
   http.addHeader("Accept", "application/json");
-  int code = http.GET();
+  int code = lockedGet(http);
   if (code != 200) {
     err = code > 0 ? "HTTP " + String(code) : String(http.errorToString(code));
     if (code < 0) {
@@ -300,19 +310,12 @@ static void handleIcsLine(const String& line, MeetingData& d, Meeting& cur, bool
 }
 
 static bool getJson(const String& url, const String& bearer, JsonDocument& doc, const JsonDocument* filter, String& err) {
-  net_lock();
-  bool ok = getJsonUnlocked(url, bearer, doc, filter, err);
-  net_unlock();
-  return ok;
+  return getJsonUnlocked(url, bearer, doc, filter, err);
 }
 
 static void fetchCalendarUnlocked(MeetingData& d);
 
-static void fetchCalendar(MeetingData& d) {
-  net_lock();
-  fetchCalendarUnlocked(d);
-  net_unlock();
-}
+static void fetchCalendar(MeetingData& d) { fetchCalendarUnlocked(d); }
 
 static void fetchCalendarUnlocked(MeetingData& d) {
   d = MeetingData();
@@ -329,7 +332,7 @@ static void fetchCalendarUnlocked(MeetingData& d) {
   WiFiClientSecure tls;
   WiFiClient plain;
   if (!begin(http, tls, plain, gCfg.icsUrl)) { d.err = "bad url"; return; }
-  int code = http.GET();
+  int code = lockedGet(http);
   if (code != 200) { d.err = "HTTP " + String(code); http.end(); return; }
 
   WiFiClient& stream = http.getStream();
