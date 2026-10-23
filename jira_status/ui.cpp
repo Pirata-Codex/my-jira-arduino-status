@@ -862,6 +862,6 @@ void ui_refresh() {
   started = true;
   lv_obj_remove_flag(topBar, LV_OBJ_FLAG_HIDDEN);
   showPage(PG_NOW, false);
-  LOG("refresh: done");
+  LOG("refresh: done, loop stack left %u bytes", (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 }
 

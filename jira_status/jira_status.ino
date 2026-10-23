@@ -19,6 +19,9 @@
 // 1/20 of the screen, allocated at runtime (a static buffer doesn't fit the DRAM segment).
 static const size_t DRAW_BUF_BYTES = TFT_HOR_RES * TFT_VER_RES / 20 * 2;
 
+// HTTPS (TLS handshake + JSON) runs in loop() now; the default 8 KB loop stack overflowed.
+SET_LOOP_TASK_STACK_SIZE(20 * 1024);
+
 static uint32_t tick() { return millis(); }
 
 // LVGL warnings and errors (e.g. "malloc failed") go to the serial monitor.
@@ -68,7 +71,7 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println();
-  LOG("boot, reset reason %d", (int)esp_reset_reason());
+  LOG("boot, reset reason %d, loop stack %u", (int)esp_reset_reason(), (unsigned)getArduinoLoopTaskStackSize());
   settings_load();
   model_init();
 
