@@ -35,6 +35,7 @@
 /* Persian/Arabic shaping + right-to-left text, for Persian card titles once a Persian font is added. */
 #define LV_USE_BIDI 1
 #define LV_USE_ARABIC_PERSIAN_CHARS 1
+#define LV_BIDI_BASE_DIR_DEF LV_BASE_DIR_AUTO
 
 #define LV_USE_LOG 0
 

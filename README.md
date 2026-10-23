@@ -63,5 +63,5 @@ The token and passwords are kept **only in the board's NVS** (flash). They are n
 ## Known limits
 
 - **Recurring meetings:** the ICS reader takes only the events of today. It doesn't expand recurring meetings (RRULE), so a weekly stand-up shows only on the day it was created. If your meetings repeat, the next step is a Microsoft Graph or Exchange calendar call.
-- **Persian text:** the built-in Montserrat fonts have no Persian glyphs, so Persian card titles show as empty boxes. Persian shaping is already on in `lv_conf.h`. The fix is to generate a Vazirmatn font with `lv_font_conv` and set it as the fallback font.
+- **Persian text:** card titles use Vazirmatn (14, 16 and 20 px, about 30 KB of flash) with Montserrat as the fallback for icons. The big numbers (28 and 48 px) stay Latin only. To change sizes or ranges, edit and run `extras/make_fonts.sh` (needs Node).
 - **Certificates:** HTTPS certificates aren't checked (`setInsecure`), because internal services often use a private CA.

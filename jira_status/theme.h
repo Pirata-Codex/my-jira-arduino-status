@@ -13,8 +13,14 @@
 #define C_RED     lv_color_hex(0xFF4D5E)
 #define C_PURPLE  lv_color_hex(0xA78BFA)
 
-#define F_SMALL   (&lv_font_montserrat_14)
-#define F_BODY    (&lv_font_montserrat_16)
-#define F_TITLE   (&lv_font_montserrat_20)
+// Vazirmatn (Latin + Persian) with Montserrat as fallback for the LV_SYMBOL_* icons.
+// Regenerate with extras/make_fonts.sh.
+LV_FONT_DECLARE(vazir_14);
+LV_FONT_DECLARE(vazir_16);
+LV_FONT_DECLARE(vazir_20);
+
+#define F_SMALL   (&vazir_14)
+#define F_BODY    (&vazir_16)
+#define F_TITLE   (&vazir_20)
 #define F_BIG     (&lv_font_montserrat_28)
 #define F_HUGE    (&lv_font_montserrat_48)
