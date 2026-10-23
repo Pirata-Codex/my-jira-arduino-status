@@ -12,6 +12,10 @@
 #include "web.h"
 #include "ui.h"
 
+#if !LV_USE_TFT_ESPI || !LV_USE_CHART || !LV_FONT_MONTSERRAT_48
+#error "LVGL is using another lv_conf.h. Copy extras/lv_conf.h over Documents/Arduino/libraries/lv_conf.h"
+#endif
+
 // 1/10 of the screen; no PSRAM needed.
 static uint32_t drawBuf[TFT_HOR_RES * TFT_VER_RES / 10 / 2];
 

@@ -12,6 +12,13 @@
 /* Display driver: LVGL's built-in TFT_eSPI glue (pins/panel come from TFT_eSPI's User_Setup.h). */
 #define LV_USE_TFT_ESPI 1
 
+/* Widgets used by the UI */
+#define LV_USE_LABEL 1
+#define LV_USE_ARC 1
+#define LV_USE_BAR 1
+#define LV_USE_CHART 1
+#define LV_USE_FLEX 1
+
 /* Fonts used by the UI */
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_16 1
