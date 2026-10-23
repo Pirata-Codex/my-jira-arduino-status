@@ -17,6 +17,9 @@ struct Settings {
   uint16_t rotateSec; // seconds per screen
   uint16_t refreshMin; // minutes between full data refreshes (Jira, calendar, Kuma)
   uint16_t kumaMin;    // minutes between Uptime Kuma-only refreshes
+  uint8_t cardsPerPage; // cards slide: rows per page (1..5)
+  uint8_t cardPageSec;  // cards slide: seconds per page
+  bool hideDone;        // cards slide: leave out Done cards
   // Company WiFi, WPA2/WPA3-Enterprise with PEAP. Tried before the normal (WiFiManager) WiFi.
   String entSsid, entIdentity, entUser, entPass;
   String entCa;        // optional CA certificate (PEM) to verify the RADIUS server

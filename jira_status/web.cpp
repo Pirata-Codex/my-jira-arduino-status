@@ -89,6 +89,11 @@ static void handleRoot() {
   h += field("rotate", "Seconds per screen", String(gCfg.rotateSec), "", "number");
   h += field("refresh", "Refresh Jira + calendar every (minutes)", String(gCfg.refreshMin), "The dashboard pauses for a few seconds while it refreshes", "number");
   h += field("kumaMin", "Refresh Kuma health every (minutes)", String(gCfg.kumaMin), "", "number");
+  h += F("<h2>Cards slide</h2>");
+  h += field("cardsPP", "Cards per page (1-5)", String(gCfg.cardsPerPage), "", "number");
+  h += field("cardSec", "Seconds per page", String(gCfg.cardPageSec), "", "number");
+  h += String("<label><input type=checkbox name=hideDone value=1 style='display:inline;width:auto'") +
+       (gCfg.hideDone ? " checked" : "") + "> Hide Done cards</label>";
   h += field("webPass", "Page password (user admin)", "", "Leave empty to keep the current one", "password");
   h += F("<button>Save</button></form><p><a href=/update>Firmware update</a></p>");
   server.send(200, "text/html", h);
@@ -113,6 +118,9 @@ static void handleSave() {
   gCfg.rotateSec = constrain(arg("rotate").toInt(), 4, 120);
   gCfg.refreshMin = constrain(arg("refresh").toInt(), 2, 240);
   gCfg.kumaMin = constrain(arg("kumaMin").toInt(), 1, 240);
+  gCfg.cardsPerPage = constrain(arg("cardsPP").toInt(), 1, 5);
+  gCfg.cardPageSec = constrain(arg("cardSec").toInt(), 2, 60);
+  gCfg.hideDone = server.hasArg("hideDone");
   if (arg("webPass").length()) gCfg.webPass = arg("webPass");
   String oldEnt = gCfg.entSsid + "|" + gCfg.entUser + "|" + gCfg.entIdentity + "|" + gCfg.entPass + "|" + gCfg.entCa;
   gCfg.entSsid = arg("entSsid");

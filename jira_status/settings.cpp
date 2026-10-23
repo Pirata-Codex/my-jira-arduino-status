@@ -26,6 +26,9 @@ void settings_load() {
   gCfg.rotateSec = prefs.getUShort("rotate", 12);
   gCfg.refreshMin = prefs.getUShort("refresh", 15);
   gCfg.kumaMin = prefs.getUShort("kumaMin", 5);
+  gCfg.cardsPerPage = prefs.getUChar("cardsPP", 5);
+  gCfg.cardPageSec = prefs.getUChar("cardSec", 5);
+  gCfg.hideDone = prefs.getBool("hideDone", false);
   gCfg.entSsid = prefs.getString("entSsid", "");
   gCfg.entIdentity = prefs.getString("entId", "");
   gCfg.entUser = prefs.getString("entUser", "");
@@ -53,6 +56,9 @@ void settings_save() {
   prefs.putUShort("rotate", gCfg.rotateSec);
   prefs.putUShort("refresh", gCfg.refreshMin);
   prefs.putUShort("kumaMin", gCfg.kumaMin);
+  prefs.putUChar("cardsPP", gCfg.cardsPerPage);
+  prefs.putUChar("cardSec", gCfg.cardPageSec);
+  prefs.putBool("hideDone", gCfg.hideDone);
   prefs.putString("entSsid", gCfg.entSsid);
   prefs.putString("entId", gCfg.entIdentity);
   prefs.putString("entUser", gCfg.entUser);

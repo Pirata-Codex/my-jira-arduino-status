@@ -557,8 +557,9 @@ static void renderSprint(time_t now) {
 
 // The card list is shown in pages of CARDS_PER_PAGE, flipped every CARD_PAGE_MS like a departures board.
 // (A continuous scroll redraws the whole list every frame; at ~10 fps on the ILI9488 it was unreadable.)
-static const int CARDS_PER_PAGE = 5;
-static const uint32_t CARD_PAGE_MS = 5000;
+// Page size, timing and "hide Done" come from the settings page.
+#define CARDS_PER_PAGE ((int)gCfg.cardsPerPage)
+#define CARD_PAGE_MS (gCfg.cardPageSec * 1000UL)
 static int cardOrder[MAX_CARDS];
 static int cardOrderLen = 0, cardPage = 0;
 static lv_timer_t* cardTimer = nullptr;
@@ -574,8 +575,8 @@ static void cardTitle() {
 static void drawCardPage() {
   lv_obj_clean(cardList);
   const SprintData& s = snap.sprint;
-  if (!s.count) {
-    errorText(cardList, s.ok ? "No cards in this sprint" : ("Jira: " + s.err).c_str());
+  if (!s.count || !cardOrderLen) {
+    errorText(cardList, !s.ok ? ("Jira: " + s.err).c_str() : s.count ? "All cards are done" : "No cards in this sprint");
     return;
   }
   int first = cardPage * CARDS_PER_PAGE;
@@ -614,6 +615,7 @@ static void startCardPages() {
   cardPage = 0;
   drawCardPage();
   if (!cardTimer) cardTimer = lv_timer_create(cardTimerCb, CARD_PAGE_MS, nullptr);
+  lv_timer_set_period(cardTimer, CARD_PAGE_MS);
   lv_timer_reset(cardTimer);
   cardsDwellMs = cardPages() * CARD_PAGE_MS;
 }
@@ -623,9 +625,11 @@ static void renderCards() {
   // Active work first, done last.
   static const CardCat order[] = {CAT_PROGRESS, CAT_REVIEW, CAT_TODO, CAT_DONE};
   cardOrderLen = 0;
-  for (CardCat cat : order)
+  for (CardCat cat : order) {
+    if (cat == CAT_DONE && gCfg.hideDone) continue;
     for (int i = 0; i < s.count; i++)
       if (s.cards[i].cat == cat) cardOrder[cardOrderLen++] = i;
+  }
   cardsDwellMs = cardPages() * CARD_PAGE_MS;
   if (cardPage >= cardPages()) cardPage = 0;
   drawCardPage();
