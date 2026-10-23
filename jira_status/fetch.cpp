@@ -416,7 +416,9 @@ static void task(void*) {
 
 void fetch_begin() {
   // TLS needs a deep stack. Core 0 keeps network work away from the UI loop on core 1.
-  // Idle priority: the TLS handshake is seconds of math; at priority 1 it starved the core-0 idle task
-  // and the task watchdog rebooted the board.
-  xTaskCreatePinnedToCore(task, "fetch", 16 * 1024, nullptr, tskIDLE_PRIORITY, nullptr, 0);
+  // The TLS handshake is seconds of uninterrupted math, which keeps the core-0 idle task from feeding
+  // the task watchdog (it rebooted the board on the first HTTPS call). Core 0 only runs WiFi and this
+  // task, so its idle watchdog is switched off; core 1 (UI) keeps its own.
+  disableCore0WDT();
+  xTaskCreatePinnedToCore(task, "fetch", 16 * 1024, nullptr, 1, nullptr, 0);
 }
