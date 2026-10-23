@@ -182,12 +182,8 @@ static String mmss(long sec) {
   return b;
 }
 
-// Persian (Jalali) date, e.g. "2 آبان 1405" (no weekday: it pushed the Gregorian date out of the panel).
-// Numbers are written with Latin digits: LVGL's Persian shaping mangled U+06F0..U+06F9 (a "2" showed as "۰"),
-// while Latin digits are laid out correctly inside right-to-left text.
+// Persian (Jalali) date as 1405/08/02, in the same HUD digits as the Gregorian date.
 static String jalaliDate(const struct tm& lt) {
-  static const char* months[] = {"فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
-                                 "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"};
   static const int gdm[] = {0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334};
   int gy = lt.tm_year + 1900, gm = lt.tm_mon + 1, gd = lt.tm_mday;
   int gy2 = gm > 2 ? gy + 1 : gy;
@@ -203,7 +199,9 @@ static String jalaliDate(const struct tm& lt) {
   int jm, jd;
   if (days < 186) { jm = 1 + days / 31; jd = 1 + days % 31; }
   else { jm = 7 + (days - 186) / 30; jd = 1 + (days - 186) % 30; }
-  return String(jd) + " " + months[jm - 1] + " " + String(jy);
+  char b[12];
+  snprintf(b, sizeof(b), "%04d/%02d/%02d", jy, jm, jd);
+  return b;
 }
 
 // ---------- arc reactor + segmented ring ----------
@@ -418,8 +416,8 @@ static void buildNow() {
   nowClock = text(L, F_CLOCK, C_CYAN, "--:--");
   lv_obj_set_style_text_letter_space(nowClock, 2, 0);
   lv_obj_set_pos(nowClock, 10, 2);
-  nowJalali = text(L, F_BODY, C_TEXT, "");
-  lv_obj_set_pos(nowJalali, 10, 54);
+  nowJalali = hudText(L, F_HUD_M, C_TEXT, "");
+  lv_obj_set_pos(nowJalali, 10, 56);
   nowDate = hudText(L, F_HUD, C_MUTED, "");
   lv_obj_set_pos(nowDate, 150, 60);
   for (int h = TL_START; h <= TL_END; h += 3) {

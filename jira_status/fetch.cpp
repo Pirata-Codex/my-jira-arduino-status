@@ -392,7 +392,14 @@ static bool getJson(const String& url, const String& bearer, JsonDocument& doc, 
 
 static void fetchCalendarUnlocked(MeetingData& d);
 
-static void fetchCalendar(MeetingData& d) { fetchCalendarUnlocked(d); }
+// One retry: the mail server sometimes drops the first TLS handshake.
+static void fetchCalendar(MeetingData& d) {
+  fetchCalendarUnlocked(d);
+  if (d.ok || !d.configured) return;
+  LOG("calendar: %s, retrying once", d.err.c_str());
+  delay(1500);
+  fetchCalendarUnlocked(d);
+}
 
 static void fetchCalendarUnlocked(MeetingData& d) {
   d = MeetingData();
