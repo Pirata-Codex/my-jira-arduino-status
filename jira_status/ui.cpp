@@ -344,9 +344,8 @@ static void buildHeader() {
   lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
   reactor(header, 8, 5, 24, true);
   lv_obj_t* name = hudText(header, F_HUD_M, C_CYAN, "F.R.I.D.A.Y.");
-  lv_obj_set_style_text_letter_space(name, 2, 0);
-  lv_obj_set_pos(name, 40, 8);
-  hdDot = rect(header, 166, 14, 6, 6, C_LIME, LV_RADIUS_CIRCLE);
+  lv_obj_set_pos(name, 38, 8);  // ~120 px wide; the dot and status line start after it
+  hdDot = rect(header, 164, 14, 6, 6, C_LIME, LV_RADIUS_CIRCLE);
   lv_anim_t a;
   lv_anim_init(&a);
   lv_anim_set_var(&a, hdDot);
@@ -357,12 +356,13 @@ static void buildHeader() {
   lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
   lv_anim_start(&a);
   hdPhrase = text(header, F_HUD, C_ICE, "");
-  lv_obj_set_width(hdPhrase, 170);
+  lv_obj_set_width(hdPhrase, 160);
   lv_label_set_long_mode(hdPhrase, LV_LABEL_LONG_DOT);
-  lv_obj_set_pos(hdPhrase, 182, 9);
+  lv_obj_set_pos(hdPhrase, 178, 9);
   hdHealth = hudText(header, F_HUD, C_LIME, "");
-  lv_obj_set_pos(hdHealth, 356, 9);
-  for (int i = 0; i < 4; i++) hdWifi[i] = rect(header, 398 + i * 5, 24 - (4 + i * 3), 3, 4 + i * 3, C_DIM);
+  lv_obj_set_pos(hdHealth, 344, 9);
+  // WiFi bars sit in their own gap between the health count and the clock (clock starts ~x 414).
+  for (int i = 0; i < 4; i++) hdWifi[i] = rect(header, 390 + i * 5, 24 - (4 + i * 3), 3, 4 + i * 3, C_DIM);
   hdClock = hudText(header, F_HUD_M, C_TEXT, "--:--");
   lv_obj_align(hdClock, LV_ALIGN_RIGHT_MID, -10, 0);
   lv_obj_add_flag(header, LV_OBJ_FLAG_HIDDEN);
