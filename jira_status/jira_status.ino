@@ -148,7 +148,8 @@ void loop() {
   lv_timer_handler();
   ui_tick();
   web_loop();
-  if (fetch_due()) ui_refresh();
+  RefreshKind due = fetch_due();
+  if (due != REFRESH_NONE) ui_refresh(due);
   static uint32_t lastBeat = 0;
   if (millis() - lastBeat > 10000) {
     lastBeat = millis();

@@ -9,7 +9,7 @@
 #include <algorithm>
 
 static volatile bool refreshNow = true;
-static uint32_t lastFetch = 0;
+static uint32_t lastFetch = 0, lastKuma = 0;
 static FetchProgress progress = nullptr;
 void fetch_request_refresh() { refreshNow = true; }
 
@@ -400,17 +400,22 @@ static bool publish(const char* name, T Snapshot::*field, Fn fill, String& err) 
   return ok;
 }
 
-bool fetch_due() {
-  if (WiFi.status() != WL_CONNECTED || !timeValid()) return false;
-  return refreshNow || millis() - lastFetch >= gCfg.refreshMin * 60000UL;
+RefreshKind fetch_due() {
+  if (WiFi.status() != WL_CONNECTED || !timeValid()) return REFRESH_NONE;
+  if (refreshNow || millis() - lastFetch >= gCfg.refreshMin * 60000UL) return REFRESH_FULL;
+  if (millis() - lastKuma >= gCfg.kumaMin * 60000UL) return REFRESH_KUMA;
+  return REFRESH_NONE;
 }
 
-void fetch_all(FetchProgress p) {
+void fetch_all(FetchProgress p, RefreshKind kind) {
   progress = p;
-  refreshNow = false;
   String err;
+  bool full = kind == REFRESH_FULL;
+  if (full) refreshNow = false;
 
-  if (settings_mock()) {
+  if (!full) {
+    for (int i = STEP_CARDS; i <= STEP_KPI; i++) report((FetchStep)i, STEP_SKIP, "unchanged");
+  } else if (settings_mock()) {
     Snapshot* m = new Snapshot();
     model_fill_mock(*m);
     model_lock();
@@ -440,7 +445,9 @@ void fetch_all(FetchProgress p) {
   model_unlock();
   report(STEP_KUMA, ok ? STEP_OK : STEP_FAIL, ok ? kumaSum : err);
 
-  if (settings_mock()) {
+  if (!full) {
+    report(STEP_CALENDAR, STEP_SKIP, "unchanged");
+  } else if (settings_mock()) {
     report(STEP_CALENDAR, STEP_OK, "demo data");
   } else if (gCfg.icsUrl.isEmpty()) {
     report(STEP_CALENDAR, STEP_SKIP, "no .ics URL");
@@ -452,6 +459,7 @@ void fetch_all(FetchProgress p) {
     model_unlock();
     report(STEP_CALENDAR, ok ? STEP_OK : STEP_FAIL, ok ? calSum : err);
   }
-  lastFetch = millis();
+  if (full) lastFetch = millis();
+  lastKuma = millis();
   progress = nullptr;
 }

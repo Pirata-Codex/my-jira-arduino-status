@@ -25,6 +25,7 @@ void settings_load() {
   gCfg.brightness = prefs.getUChar("bright", 200);
   gCfg.rotateSec = prefs.getUShort("rotate", 12);
   gCfg.refreshMin = prefs.getUShort("refresh", 15);
+  gCfg.kumaMin = prefs.getUShort("kumaMin", 5);
   gCfg.entSsid = prefs.getString("entSsid", "");
   gCfg.entIdentity = prefs.getString("entId", "");
   gCfg.entUser = prefs.getString("entUser", "");
@@ -51,6 +52,7 @@ void settings_save() {
   prefs.putUChar("bright", gCfg.brightness);
   prefs.putUShort("rotate", gCfg.rotateSec);
   prefs.putUShort("refresh", gCfg.refreshMin);
+  prefs.putUShort("kumaMin", gCfg.kumaMin);
   prefs.putString("entSsid", gCfg.entSsid);
   prefs.putString("entId", gCfg.entIdentity);
   prefs.putString("entUser", gCfg.entUser);

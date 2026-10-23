@@ -828,12 +828,12 @@ void ui_tick() {
     showPage((page + 1) % PG_COUNT, true);
 }
 
-void ui_refresh() {
-  LOG("refresh: start");
+void ui_refresh(RefreshKind kind) {
+  LOG("refresh: start (%s)", kind == REFRESH_FULL ? "full" : "kuma");
   started = false;
   showBanner(BN_NONE, "", "");
   lv_obj_add_flag(topBar, LV_OBJ_FLAG_HIDDEN);
-  lv_label_set_text(loadTitle, "Refreshing data");
+  lv_label_set_text(loadTitle, kind == REFRESH_FULL ? "Refreshing data" : "Checking services");
   for (int i = 0; i < STEP_COUNT; i++) onProgress((FetchStep)i, STEP_WAIT, "");
   lv_screen_load(loadScreen);
   // Free every dashboard object so the HTTPS handshakes get the RAM.
@@ -847,7 +847,7 @@ void ui_refresh() {
   lv_refr_now(nullptr);
   LOG("refresh: dashboard freed");
 
-  fetch_all(onProgress);
+  fetch_all(onProgress, kind);
 
   lv_label_set_text(loadTitle, LV_SYMBOL_OK "  Data ready");
   lv_refr_now(nullptr);

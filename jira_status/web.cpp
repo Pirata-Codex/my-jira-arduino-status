@@ -87,7 +87,8 @@ static void handleRoot() {
   h += F("<h2>Display</h2>");
   h += field("bright", "Brightness (0-255)", String(gCfg.brightness), "", "number");
   h += field("rotate", "Seconds per screen", String(gCfg.rotateSec), "", "number");
-  h += field("refresh", "Refresh data every (minutes)", String(gCfg.refreshMin), "The dashboard pauses for a few seconds while it refreshes", "number");
+  h += field("refresh", "Refresh Jira + calendar every (minutes)", String(gCfg.refreshMin), "The dashboard pauses for a few seconds while it refreshes", "number");
+  h += field("kumaMin", "Refresh Kuma health every (minutes)", String(gCfg.kumaMin), "", "number");
   h += field("webPass", "Page password (user admin)", "", "Leave empty to keep the current one", "password");
   h += F("<button>Save</button></form><p><a href=/update>Firmware update</a></p>");
   server.send(200, "text/html", h);
@@ -111,6 +112,7 @@ static void handleSave() {
   gCfg.brightness = constrain(arg("bright").toInt(), 10, 255);
   gCfg.rotateSec = constrain(arg("rotate").toInt(), 4, 120);
   gCfg.refreshMin = constrain(arg("refresh").toInt(), 2, 240);
+  gCfg.kumaMin = constrain(arg("kumaMin").toInt(), 1, 240);
   if (arg("webPass").length()) gCfg.webPass = arg("webPass");
   String oldEnt = gCfg.entSsid + "|" + gCfg.entUser + "|" + gCfg.entIdentity + "|" + gCfg.entPass + "|" + gCfg.entCa;
   gCfg.entSsid = arg("entSsid");
