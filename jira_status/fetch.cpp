@@ -101,6 +101,13 @@ static bool getJson(const String& url, const String& bearer, JsonDocument& doc, 
   int code = http.GET();
   if (code != 200) {
     err = code > 0 ? "HTTP " + String(code) : String(http.errorToString(code));
+    if (code < 0) {
+      // Say why: a TLS error (from mbedTLS) or too little memory for the handshake.
+      char tlsErr[100] = "";
+      if (url.startsWith("https")) tls.lastError(tlsErr, sizeof(tlsErr));
+      if (*tlsErr) err += String(" / tls: ") + tlsErr;
+      err += " / heap " + String(ESP.getFreeHeap() / 1024) + "k, block " + String(ESP.getMaxAllocHeap() / 1024) + "k";
+    }
     http.end();
     return false;
   }
