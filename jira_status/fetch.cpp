@@ -416,5 +416,7 @@ static void task(void*) {
 
 void fetch_begin() {
   // TLS needs a deep stack. Core 0 keeps network work away from the UI loop on core 1.
-  xTaskCreatePinnedToCore(task, "fetch", 16 * 1024, nullptr, 1, nullptr, 0);
+  // Idle priority: the TLS handshake is seconds of math; at priority 1 it starved the core-0 idle task
+  // and the task watchdog rebooted the board.
+  xTaskCreatePinnedToCore(task, "fetch", 16 * 1024, nullptr, tskIDLE_PRIORITY, nullptr, 0);
 }
