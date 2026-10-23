@@ -304,13 +304,55 @@ static void addMeeting(MeetingData& d, const Meeting& m) {
   if (m.start < d.m[latest].start) d.m[latest] = m;
 }
 
+// Meeting place shown on the board, in this order:
+//  1. a room code like "3M2" (digits, "M", digits) from the location, title or description;
+//  2. a Google Meet or Skyroom link from the location or description;
+//  3. the location text as is.
+static String findRoom(const String& s) {
+  for (int i = 1; i + 1 < (int)s.length(); i++) {
+    if (s[i] != 'M' || !isdigit((uint8_t)s[i - 1]) || !isdigit((uint8_t)s[i + 1])) continue;
+    int a = i - 1, b = i + 1;
+    while (a > 0 && isdigit((uint8_t)s[a - 1])) a--;
+    while (b + 1 < (int)s.length() && isdigit((uint8_t)s[b + 1])) b++;
+    return s.substring(a, b + 1);
+  }
+  return "";
+}
+
+static String findLink(const String& s) {
+  for (const char* host : {"meet.google.com/", "skyroom.online/"}) {
+    int at = s.indexOf(host);
+    if (at < 0) continue;
+    // Include a "www." in front; stop at whitespace, quotes, separators or an iCalendar escape.
+    if (at >= 4 && s.substring(at - 4, at) == "www.") at -= 4;
+    int end = at;
+    while (end < (int)s.length() && !strchr(" \t\r\n\"'<>,;\\", s[end])) end++;
+    return s.substring(at, end);
+  }
+  return "";
+}
+
+static String meetingPlace(const String& location, const String& title, const String& desc) {
+  String room = findRoom(location);
+  if (room.isEmpty()) room = findRoom(title);
+  if (room.isEmpty()) room = findRoom(desc);
+  if (room.length()) return room;
+  String link = findLink(location);
+  if (link.isEmpty()) link = findLink(desc);
+  if (link.length()) return link;
+  return location;
+}
+
+static String icsDesc;  // DESCRIPTION of the event being parsed (only used for the place)
+
 static void handleIcsLine(const String& line, MeetingData& d, Meeting& cur, bool& inEvent, bool& allDay, time_t dayStart, time_t dayEnd) {
-  if (line == "BEGIN:VEVENT") { cur = Meeting(); inEvent = true; allDay = false; return; }
+  if (line == "BEGIN:VEVENT") { cur = Meeting(); icsDesc = ""; inEvent = true; allDay = false; return; }
   if (!inEvent) return;
   if (line == "END:VEVENT") {
     inEvent = false;
     if (!allDay && cur.start >= dayStart && cur.start < dayEnd) {
       if (!cur.end) cur.end = cur.start + 30 * 60;
+      cur.where = meetingPlace(cur.where, cur.title, icsDesc).substring(0, 60);
       addMeeting(d, cur);
     }
     return;
@@ -325,7 +367,8 @@ static void handleIcsLine(const String& line, MeetingData& d, Meeting& cur, bool
   if (name == "DTSTART") { cur.start = parseIcsDate(value, ad); allDay = ad; }
   else if (name == "DTEND") cur.end = parseIcsDate(value, ad);
   else if (name == "SUMMARY") { value.replace("\\,", ","); cur.title = value.substring(0, 80); }
-  else if (name == "LOCATION") { value.replace("\\,", ","); cur.where = value.substring(0, 60); }
+  else if (name == "LOCATION") { value.replace("\\,", ","); cur.where = value.substring(0, 120); }
+  else if (name == "DESCRIPTION") icsDesc = value.substring(0, 800);
 }
 
 static bool getJson(const String& url, const String& bearer, JsonDocument& doc, const JsonDocument* filter, String& err) {
@@ -365,9 +408,9 @@ static void fetchCalendarUnlocked(MeetingData& d) {
     // Folded lines continue the previous one with a leading space.
     bool folded = line.length() && (line[0] == ' ' || line[0] == '\t');
     line.trim();
-    if (folded && pending.length()) { if (pending.length() < 200) pending += line; continue; }
+    if (folded && pending.length()) { if (pending.length() < 800) pending += line; continue; }
     if (pending.length()) handleIcsLine(pending, d, cur, inEvent, allDay, dayStart, dayEnd);
-    pending = line.substring(0, 200);
+    pending = line.substring(0, 800);
   }
   if (pending.length()) handleIcsLine(pending, d, cur, inEvent, allDay, dayStart, dayEnd);
   http.end();

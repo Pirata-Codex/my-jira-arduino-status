@@ -6,8 +6,12 @@
 #include <WiFi.h>
 #include "fetch.h"
 
+// F.R.I.D.A.Y. HUD look. Behavior (pages, rotation, refresh flow, alerts) is unchanged; drawing is kept
+// cheap for the ILI9488 (~10 full frames/s): outline-only panels, no shadows, only small areas animate.
+
 enum Page { PG_NOW, PG_SPRINT, PG_CARDS, PG_KPI, PG_HEALTH, PG_COUNT };
-static const char* PAGE_TITLES[PG_COUNT] = {"Now", "Sprint", "My cards", "KPIs", "Health"};
+static const char* PAGE_TITLES[PG_COUNT] = {"PULSE", "SPRINT", "CARDS", "KPI", "HEALTH"};
+static const char* PAGE_ICONS[PG_COUNT] = {LV_SYMBOL_HOME, LV_SYMBOL_REFRESH, LV_SYMBOL_LIST, LV_SYMBOL_CHARGE, LV_SYMBOL_POWER};
 
 static Snapshot snap;                 // UI-side copy of gData
 static uint32_t seenVersion = UINT32_MAX;
@@ -18,42 +22,30 @@ static int page = PG_NOW;
 static uint32_t lastSwitch = 0, lastClock = 0;
 static bool started = false;
 
-// top bar
-static lv_obj_t *topBar, *topTitle, *topClock, *topWifi, *topHealth, *dots[PG_COUNT];
+// header + tab bar (lv_layer_top, survive refreshes)
+static lv_obj_t *header, *hdPhrase, *hdHealth, *hdClock, *hdWifi[4], *hdDot;
+static lv_obj_t *tabBar, *tabLbl[PG_COUNT], *tabLine;
+static String hdPhraseText;
 // banner (meeting / outage)
-static lv_obj_t *banner, *bannerIcon, *bannerText, *bannerSub;
+static lv_obj_t *banner, *bnLine, *bnBar, *bnTag, *bnText, *bnRight, *bnCount, *bnCountLbl;
 static int bannerMode = -1;
 // Now
-static lv_obj_t *nowClock, *nowDate, *nowJalali, *nowMeetTitle, *nowMeetTime, *nowMeetWhere, *nowWorkKey, *nowWorkTitle, *nowWorkStatus, *nowMini;
+static lv_obj_t *nowClock, *nowDate, *nowJalali, *nowMeet, *nowTlBar, *nowTlNow, *nowSprint, *nowDays, *nowRows;
+static lv_obj_t *nowLeg[4];
 // Sprint
-static lv_obj_t *spArc, *spPts, *spPct, *spName, *spDays, *spBars[4], *spBarLbl[4], *spChart, *spFoot;
+static lv_obj_t *spName, *spDays, *spBars[4], *spBarLbl[4], *spChart, *spFoot, *spBurnNote;
 static lv_chart_series_t *spSeries, *spIdeal;
-static lv_obj_t* spBurnNote;
 // Cards
-static lv_obj_t *cardView, *cardList;
+static lv_obj_t* cardList;
 static uint32_t cardsDwellMs = 0;  // how long the cards slide needs to show every page once
-static const int CARD_VIEW_H = 232;
 // KPIs
 static lv_obj_t *kpiVal[6], *kpiLbl[6], *kpiSub[6];
 // Health
 static lv_obj_t *hlSummary, *hlGrid;
 
-// ---------- small builders ----------
+static const int CONTENT_Y = 40;      // between the header (0..36) and the tab bar (268..316)
 
-static lv_obj_t* box(lv_obj_t* parent, int x, int y, int w, int h, lv_color_t bg = C_CARD) {
-  lv_obj_t* o = lv_obj_create(parent);
-  lv_obj_remove_style_all(o);
-  lv_obj_set_pos(o, x, y);
-  lv_obj_set_size(o, w, h);
-  lv_obj_set_style_bg_color(o, bg, 0);
-  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
-  lv_obj_set_style_radius(o, 14, 0);
-  lv_obj_set_style_border_width(o, 1, 0);
-  lv_obj_set_style_border_color(o, C_BORDER, 0);
-  lv_obj_set_style_pad_all(o, 12, 0);
-  lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
-  return o;
-}
+// ---------- small builders ----------
 
 static lv_obj_t* text(lv_obj_t* parent, const lv_font_t* font, lv_color_t color, const char* s = "") {
   lv_obj_t* l = lv_label_create(parent);
@@ -63,18 +55,65 @@ static lv_obj_t* text(lv_obj_t* parent, const lv_font_t* font, lv_color_t color,
   return l;
 }
 
-static lv_obj_t* caption(lv_obj_t* parent, const char* s) {
-  lv_obj_t* l = text(parent, F_SMALL, C_MUTED, s);
+static lv_obj_t* hudText(lv_obj_t* parent, const lv_font_t* font, lv_color_t color, const char* s = "") {
+  lv_obj_t* l = text(parent, font, color, s);
   lv_obj_set_style_text_letter_space(l, 1, 0);
   return l;
 }
 
-// Long messages (fetch errors) wrap instead of being cut off.
-static lv_obj_t* errorText(lv_obj_t* parent, const char* s) {
-  lv_obj_t* l = text(parent, F_BODY, C_MUTED, s);
-  lv_obj_set_width(l, 440);
-  lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+static lv_obj_t* rect(lv_obj_t* parent, int x, int y, int w, int h, lv_color_t color, int radius = 0) {
+  lv_obj_t* o = lv_obj_create(parent);
+  lv_obj_remove_style_all(o);
+  lv_obj_set_pos(o, x, y);
+  lv_obj_set_size(o, w, h);
+  lv_obj_set_style_bg_color(o, color, 0);
+  lv_obj_set_style_bg_opa(o, LV_OPA_COVER, 0);
+  lv_obj_set_style_radius(o, radius, 0);
+  lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+  return o;
+}
+
+static lv_obj_t* plain(lv_obj_t* parent, int x, int y, int w, int h) {
+  lv_obj_t* o = lv_obj_create(parent);
+  lv_obj_remove_style_all(o);
+  lv_obj_set_pos(o, x, y);
+  lv_obj_set_size(o, w, h);
+  lv_obj_remove_flag(o, LV_OBJ_FLAG_SCROLLABLE);
+  return o;
+}
+
+// lv_line keeps a pointer to its points, so each line owns a heap copy, freed with the line.
+static void freePoints(lv_event_t* e) { lv_free(lv_event_get_user_data(e)); }
+
+static lv_obj_t* polyline(lv_obj_t* parent, const lv_point_precise_t* src, int n, lv_color_t color, int width) {
+  auto* pts = (lv_point_precise_t*)lv_malloc(sizeof(lv_point_precise_t) * n);
+  memcpy(pts, src, sizeof(lv_point_precise_t) * n);
+  lv_obj_t* l = lv_line_create(parent);
+  lv_line_set_points(l, pts, n);
+  lv_obj_set_style_line_color(l, color, 0);
+  lv_obj_set_style_line_width(l, width, 0);
+  lv_obj_add_event_cb(l, freePoints, LV_EVENT_DELETE, pts);
+  lv_obj_set_pos(l, 0, 0);
   return l;
+}
+
+// HUD panel: transparent box with a chamfered outline; optional bright corner brackets.
+// Children are placed with absolute coordinates inside it.
+static lv_obj_t* panel(lv_obj_t* parent, int x, int y, int w, int h, int cut = 8, lv_color_t line = C_LINE,
+                       bool brackets = false, lv_obj_t** outline = nullptr) {
+  lv_obj_t* o = plain(parent, x, y, w, h);
+  int r = w - 1, b = h - 1;
+  lv_point_precise_t p[9] = {{cut, 0}, {r - cut, 0}, {r, cut}, {r, b - cut}, {r - cut, b},
+                             {cut, b}, {0, b - cut}, {0, cut}, {cut, 0}};
+  lv_obj_t* l = polyline(o, p, 9, line, 1);
+  if (outline) *outline = l;
+  if (brackets) {
+    lv_point_precise_t tl[4] = {{0, cut + 14}, {0, cut}, {cut, 0}, {cut + 14, 0}};
+    lv_point_precise_t br[4] = {{r, b - cut - 14}, {r, b - cut}, {r - cut, b}, {r - cut - 14, b}};
+    polyline(o, tl, 4, C_CYAN, 2);
+    polyline(o, br, 4, C_CYAN, 2);
+  }
+  return o;
 }
 
 static lv_obj_t* newScreen() {
@@ -85,19 +124,28 @@ static lv_obj_t* newScreen() {
   return s;
 }
 
+// Long messages (fetch errors) wrap instead of being cut off.
+static lv_obj_t* errorText(lv_obj_t* parent, int x, int y, const char* s) {
+  lv_obj_t* l = hudText(parent, F_HUD, C_AMBER, s);
+  lv_obj_set_pos(l, x, y);
+  lv_obj_set_width(l, 440);
+  lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+  return l;
+}
+
 static lv_color_t catColor(CardCat c, bool blocked) {
-  if (blocked) return C_RED;
+  if (blocked) return C_AMBER;
   switch (c) {
-    case CAT_PROGRESS: return C_ACCENT;
-    case CAT_REVIEW: return C_PURPLE;
-    case CAT_DONE: return C_GREEN;
-    default: return C_MUTED;
+    case CAT_PROGRESS: return C_CYAN;
+    case CAT_REVIEW: return C_VIOLET;
+    case CAT_DONE: return C_LIME;
+    default: return C_ICE;
   }
 }
 
-static const char* catName(CardCat c) {
-  static const char* n[] = {"To Do", "In Progress", "Review", "Done"};
-  return n[c];
+static const char* catName(CardCat c, bool blocked) {
+  static const char* n[] = {"TO DO", "IN PROGRESS", "REVIEW", "DONE"};
+  return blocked ? "BLOCKED" : n[c];
 }
 
 static String fmtPts(float p) {
@@ -109,6 +157,12 @@ static String hhmm(time_t t) {
   localtime_r(&t, &lt);
   char b[8];
   strftime(b, sizeof(b), "%H:%M", &lt);
+  return b;
+}
+
+static String mmss(long sec) {
+  char b[12];
+  snprintf(b, sizeof(b), "%02ld:%02ld", sec / 60, sec % 60);
   return b;
 }
 
@@ -151,229 +205,323 @@ static String jalaliDate(const struct tm& lt) {
   return String(weekdays[lt.tm_wday]) + " " + faDigits(jd) + " " + months[jm - 1] + " " + faDigits(jy);
 }
 
-static void pulseCb(void* obj, int32_t v) { lv_obj_set_style_bg_opa((lv_obj_t*)obj, (lv_opa_t)v, 0); }
+// ---------- arc reactor + segmented ring ----------
 
-// ---------- build ----------
+static void spinCb(void* arc, int32_t v) { lv_arc_set_rotation((lv_obj_t*)arc, v); }
 
-static void buildTopBar() {
-  lv_obj_t* top = lv_layer_top();
-  topBar = lv_obj_create(top);
-  lv_obj_remove_style_all(topBar);
-  lv_obj_set_size(topBar, SCREEN_W, 36);
-  lv_obj_set_style_pad_hor(topBar, 14, 0);
-  lv_obj_remove_flag(topBar, LV_OBJ_FLAG_SCROLLABLE);
-
-  topTitle = text(topBar, F_TITLE, C_TEXT, "Now");
-  lv_obj_align(topTitle, LV_ALIGN_LEFT_MID, 0, 2);
-
-  for (int i = 0; i < PG_COUNT; i++) {
-    dots[i] = lv_obj_create(topBar);
-    lv_obj_remove_style_all(dots[i]);
-    lv_obj_set_size(dots[i], 6, 6);
-    lv_obj_set_style_radius(dots[i], 3, 0);
-    lv_obj_set_style_bg_opa(dots[i], LV_OPA_COVER, 0);
-    lv_obj_align(dots[i], LV_ALIGN_CENTER, (i - PG_COUNT / 2) * 12, 2);
+static lv_obj_t* arcRing(lv_obj_t* parent, int x, int y, int size, int width, lv_color_t color, bool track) {
+  lv_obj_t* a = lv_arc_create(parent);
+  lv_obj_set_pos(a, x, y);
+  lv_obj_set_size(a, size, size);
+  lv_obj_remove_style(a, nullptr, LV_PART_KNOB);
+  lv_obj_remove_flag(a, LV_OBJ_FLAG_CLICKABLE);
+  lv_arc_set_bg_angles(a, 0, 360);
+  lv_obj_set_style_arc_width(a, width, LV_PART_MAIN);
+  lv_obj_set_style_arc_width(a, width, LV_PART_INDICATOR);
+  lv_obj_set_style_arc_rounded(a, false, LV_PART_MAIN);
+  lv_obj_set_style_arc_rounded(a, false, LV_PART_INDICATOR);
+  lv_obj_set_style_pad_all(a, 0, 0);
+  if (track) {
+    lv_obj_set_style_arc_color(a, color, LV_PART_MAIN);
+    lv_obj_set_style_arc_opa(a, LV_OPA_TRANSP, LV_PART_INDICATOR);
+  } else {
+    lv_obj_set_style_arc_opa(a, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_arc_color(a, color, LV_PART_INDICATOR);
   }
+  return a;
+}
 
-  topClock = text(topBar, F_BODY, C_TEXT, "--:--");
-  lv_obj_align(topClock, LV_ALIGN_RIGHT_MID, 0, 2);
-  topWifi = text(topBar, F_SMALL, C_MUTED, LV_SYMBOL_WIFI);
-  lv_obj_align(topWifi, LV_ALIGN_RIGHT_MID, -56, 2);
-  topHealth = text(topBar, F_SMALL, C_GREEN, "");
-  lv_obj_align(topHealth, LV_ALIGN_RIGHT_MID, -82, 2);
-  lv_obj_add_flag(topBar, LV_OBJ_FLAG_HIDDEN);
+static void spin(lv_obj_t* arc, uint32_t ms, bool reverse) {
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, arc);
+  lv_anim_set_exec_cb(&a, spinCb);
+  lv_anim_set_values(&a, reverse ? 360 : 0, reverse ? 0 : 360);
+  lv_anim_set_duration(&a, ms);
+  lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+  lv_anim_set_path_cb(&a, lv_anim_path_linear);
+  lv_anim_start(&a);
+}
+
+// Iron Man style arc reactor: static outer ring, two counter-rotating broken rings, glowing core.
+static void reactor(lv_obj_t* parent, int x, int y, int size, bool animate) {
+  arcRing(parent, x, y, size, max(1, size / 24), C_LINE, true);
+  int m = size * 74 / 100, i = size * 48 / 100, c = max(4, size * 20 / 100);
+  lv_obj_t* mid = arcRing(parent, x + (size - m) / 2, y + (size - m) / 2, m, max(2, size / 9), C_CYAN, false);
+  lv_arc_set_angles(mid, 0, 270);
+  lv_obj_t* in = arcRing(parent, x + (size - i) / 2, y + (size - i) / 2, i, max(2, size / 10), C_ICE, false);
+  lv_arc_set_angles(in, 0, 120);
+  rect(parent, x + (size - c) / 2, y + (size - c) / 2, c, c, C_CYAN, LV_RADIUS_CIRCLE);
+  if (animate) {
+    spin(mid, 3000, false);
+    spin(in, 2000, true);
+  }
+}
+
+struct Ring { lv_obj_t* seg[3]; lv_obj_t *pct, *sub; };
+
+// Sprint ring: done (lime), review (violet), doing (cyan) as one segmented circle, % in the middle.
+static void makeRing(Ring& r, lv_obj_t* parent, int x, int y, int size, int width) {
+  lv_obj_t* track = arcRing(parent, x, y, size, width, C_DIM, true);
+  r.seg[0] = arcRing(parent, x, y, size, width, C_LIME, false);
+  r.seg[1] = arcRing(parent, x, y, size, width, C_VIOLET, false);
+  r.seg[2] = arcRing(parent, x, y, size, width, C_CYAN, false);
+  r.pct = hudText(track, F_HUD_L, C_LIME, "0%");
+  lv_obj_align(r.pct, LV_ALIGN_CENTER, 0, -6);
+  r.sub = hudText(track, F_HUD, C_MUTED, "");
+  lv_obj_align(r.sub, LV_ALIGN_CENTER, 0, 14);
+}
+
+static void setRing(Ring& r, const SprintData& s) {
+  float vals[3] = {0, 0, 0};
+  for (int i = 0; i < s.count; i++) {
+    const Card& c = s.cards[i];
+    if (c.cat == CAT_DONE) vals[0] += c.pts;
+    else if (c.cat == CAT_REVIEW) vals[1] += c.pts;
+    else if (c.cat == CAT_PROGRESS) vals[2] += c.pts;
+  }
+  float acc = 0;
+  for (int i = 0; i < 3; i++) {
+    float deg = s.ptsTotal > 0 ? 360.0f * vals[i] / s.ptsTotal : 0;
+    if (deg < 1) {
+      lv_obj_add_flag(r.seg[i], LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_remove_flag(r.seg[i], LV_OBJ_FLAG_HIDDEN);
+      int start = 270 + (int)(360.0f * acc / s.ptsTotal);  // 270 = 12 o'clock
+      if (deg >= 359) lv_arc_set_angles(r.seg[i], 0, 360);
+      else lv_arc_set_angles(r.seg[i], start % 360, (start + (int)deg) % 360);
+    }
+    acc += vals[i];
+  }
+  int pct = s.ptsTotal > 0 ? (int)(100 * s.ptsDone / s.ptsTotal + 0.5f) : 0;
+  lv_label_set_text_fmt(r.pct, "%d%%", pct);
+  lv_label_set_text(r.sub, (fmtPts(s.ptsDone) + "/" + fmtPts(s.ptsTotal)).c_str());
+}
+
+static Ring nowRing, spRing;
+
+// Ticket row: accent bar, key over title, outlined status pill, points.
+static void ticketRow(lv_obj_t* parent, int x, int y, int w, const Card& c) {
+  lv_color_t col = catColor(c.cat, c.blocked);
+  lv_obj_t* r = panel(parent, x, y, w, 42, 6);
+  rect(r, 8, 10, 3, 22, col);
+  lv_obj_t* key = hudText(r, F_HUD_M, col, c.key.c_str());
+  lv_obj_set_pos(key, 18, 2);
+  lv_obj_t* title = text(r, F_SMALL, c.cat == CAT_DONE ? C_MUTED : C_TEXT, c.title.c_str());
+  lv_obj_set_width(title, w - 170);
+  lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
+  lv_obj_set_pos(title, 18, 19);
+  lv_obj_t* pill = plain(r, w - 142, 11, 100, 20);
+  lv_obj_set_style_radius(pill, 10, 0);
+  lv_obj_set_style_border_width(pill, 1, 0);
+  lv_obj_set_style_border_color(pill, col, 0);
+  lv_obj_t* pl = hudText(pill, F_HUD, col, catName(c.cat, c.blocked));
+  lv_obj_center(pl);
+  lv_obj_t* pts = hudText(r, F_HUD_M, C_MUTED, fmtPts(c.pts).c_str());
+  lv_obj_align(pts, LV_ALIGN_RIGHT_MID, -12, 0);
+}
+
+// ---------- build: header, tab bar, banner (layer_top) ----------
+
+static void blinkCb(void* o, int32_t v) { lv_obj_set_style_bg_opa((lv_obj_t*)o, (lv_opa_t)v, 0); }
+
+static void buildHeader() {
+  header = panel(lv_layer_top(), 4, 2, 472, 34, 8);
+  lv_obj_set_style_bg_color(header, C_BG, 0);
+  lv_obj_set_style_bg_opa(header, LV_OPA_COVER, 0);
+  reactor(header, 8, 5, 24, true);
+  lv_obj_t* name = hudText(header, F_HUD_M, C_CYAN, "F.R.I.D.A.Y.");
+  lv_obj_set_style_text_letter_space(name, 2, 0);
+  lv_obj_set_pos(name, 40, 8);
+  hdDot = rect(header, 166, 14, 6, 6, C_LIME, LV_RADIUS_CIRCLE);
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, hdDot);
+  lv_anim_set_exec_cb(&a, blinkCb);
+  lv_anim_set_values(&a, 60, 255);
+  lv_anim_set_duration(&a, 900);
+  lv_anim_set_playback_duration(&a, 900);
+  lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+  lv_anim_start(&a);
+  hdPhrase = hudText(header, F_HUD, C_ICE, "");
+  lv_obj_set_width(hdPhrase, 170);
+  lv_label_set_long_mode(hdPhrase, LV_LABEL_LONG_DOT);
+  lv_obj_set_pos(hdPhrase, 182, 11);
+  hdHealth = hudText(header, F_HUD, C_LIME, "");
+  lv_obj_set_pos(hdHealth, 356, 11);
+  for (int i = 0; i < 4; i++) hdWifi[i] = rect(header, 398 + i * 5, 24 - (4 + i * 3), 3, 4 + i * 3, C_DIM);
+  hdClock = hudText(header, F_HUD_M, C_TEXT, "--:--");
+  lv_obj_align(hdClock, LV_ALIGN_RIGHT_MID, -10, 0);
+  lv_obj_add_flag(header, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void buildTabBar() {
+  tabBar = panel(lv_layer_top(), 4, 268, 472, 48, 8);
+  lv_obj_set_style_bg_color(tabBar, C_BG, 0);
+  lv_obj_set_style_bg_opa(tabBar, LV_OPA_COVER, 0);
+  for (int i = 0; i < PG_COUNT; i++) {
+    if (i) {
+      lv_point_precise_t sep[2] = {{(int32_t)(i * 94), 10}, {(int32_t)(i * 94), 38}};
+      polyline(tabBar, sep, 2, C_DIM, 1);
+    }
+    tabLbl[i] = hudText(tabBar, F_HUD, C_MUTED, (String(PAGE_ICONS[i]) + " " + PAGE_TITLES[i]).c_str());
+    lv_obj_align(tabLbl[i], LV_ALIGN_TOP_MID, (i - 2) * 94, 15);
+  }
+  tabLine = rect(tabBar, 0, 40, 56, 2, C_CYAN);
+  lv_obj_add_flag(tabBar, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void buildBanner() {
-  banner = box(lv_layer_top(), 10, SCREEN_H - 66, SCREEN_W - 20, 56, C_AMBER);
-  lv_obj_set_style_border_width(banner, 0, 0);
-  lv_obj_set_style_pad_hor(banner, 14, 0);
-  lv_obj_set_style_pad_ver(banner, 6, 0);
-  bannerIcon = text(banner, F_BIG, lv_color_black(), LV_SYMBOL_BELL);
-  lv_obj_align(bannerIcon, LV_ALIGN_LEFT_MID, 0, 0);
-  bannerText = text(banner, F_TITLE, lv_color_black(), "");
-  lv_obj_set_width(bannerText, SCREEN_W - 100);
-  lv_label_set_long_mode(bannerText, LV_LABEL_LONG_DOT);
-  lv_obj_align(bannerText, LV_ALIGN_TOP_LEFT, 44, 0);
-  bannerSub = text(banner, F_SMALL, lv_color_black(), "");
-  lv_obj_set_width(bannerSub, SCREEN_W - 100);
-  lv_label_set_long_mode(bannerSub, LV_LABEL_LONG_DOT);
-  lv_obj_align(bannerSub, LV_ALIGN_BOTTOM_LEFT, 44, 0);
+  // Opaque (screen color) so it covers the tab bar; the chamfered outline carries the alert color.
+  banner = plain(lv_layer_top(), 4, 266, 472, 50);
+  lv_obj_set_style_bg_color(banner, C_BG, 0);
+  lv_obj_set_style_bg_opa(banner, LV_OPA_COVER, 0);
+  int r = 471, b = 49, cut = 8;
+  lv_point_precise_t p[9] = {{cut, 0}, {r - cut, 0}, {r, cut}, {r, b - cut}, {r - cut, b},
+                             {cut, b}, {0, b - cut}, {0, cut}, {cut, 0}};
+  bnLine = polyline(banner, p, 9, C_AMBER, 2);
+  bnBar = rect(banner, 0, 9, 4, 32, C_AMBER);
+  bnTag = hudText(banner, F_HUD, C_AMBER, "");
+  lv_obj_set_pos(bnTag, 16, 5);
+  bnText = text(banner, F_BODY, C_TEXT, "");
+  lv_obj_set_width(bnText, 300);
+  lv_label_set_long_mode(bnText, LV_LABEL_LONG_DOT);
+  lv_obj_set_pos(bnText, 16, 21);
+  bnCount = plain(banner, 330, 16, 38, 18);
+  lv_obj_set_style_border_width(bnCount, 1, 0);
+  lv_obj_set_style_border_color(bnCount, C_RED, 0);
+  bnCountLbl = hudText(bnCount, F_HUD, C_RED, "1/2");
+  lv_obj_center(bnCountLbl);
+  bnRight = hudText(banner, F_HUD_L, C_AMBER, "");
+  lv_obj_align(bnRight, LV_ALIGN_RIGHT_MID, -12, 0);
   lv_obj_add_flag(banner, LV_OBJ_FLAG_HIDDEN);
+}
+
+// ---------- build: pages ----------
+
+static const int TL_START = 9, TL_END = 18, TL_X = 10, TL_W = 206;  // day timeline 09:00-18:00
+
+static int tlX(time_t t) {
+  struct tm lt;
+  localtime_r(&t, &lt);
+  int min = (lt.tm_hour - TL_START) * 60 + lt.tm_min;
+  return constrain(min * TL_W / ((TL_END - TL_START) * 60), 0, TL_W);
 }
 
 static void buildNow() {
   lv_obj_t* s = screens[PG_NOW] = newScreen();
-  nowClock = text(s, F_HUGE, C_TEXT, "--:--");
-  lv_obj_set_pos(nowClock, 18, 52);
-  nowDate = text(s, F_BODY, C_MUTED, "");
-  lv_obj_set_pos(nowDate, 20, 110);
-  nowJalali = text(s, F_BODY, C_TEXT, "");
-  lv_obj_set_pos(nowJalali, 20, 134);
-  nowMini = text(s, F_SMALL, C_ACCENT, "");
-  lv_obj_set_width(nowMini, 206);
-  lv_label_set_long_mode(nowMini, LV_LABEL_LONG_WRAP);
-  lv_obj_set_pos(nowMini, 20, 160);
+  lv_obj_t* L = panel(s, 6, CONTENT_Y, 228, 130, 8, C_LINE, true);
+  nowClock = text(L, F_CLOCK, C_CYAN, "--:--");
+  lv_obj_set_style_text_letter_space(nowClock, 2, 0);
+  lv_obj_set_pos(nowClock, 10, 2);
+  nowJalali = text(L, F_BODY, C_TEXT, "");
+  lv_obj_set_pos(nowJalali, 10, 54);
+  nowDate = hudText(L, F_HUD, C_MUTED, "");
+  lv_obj_set_pos(nowDate, 150, 60);
+  for (int h = TL_START; h <= TL_END; h += 3) {
+    lv_obj_t* l = hudText(L, F_HUD, C_MUTED, (h < 10 ? "0" + String(h) : String(h)).c_str());
+    lv_obj_set_pos(l, TL_X + (h - TL_START) * TL_W / (TL_END - TL_START) - (h == TL_END ? 14 : 0), 78);
+  }
+  nowTlBar = rect(L, TL_X, 94, TL_W, 10, C_DIM);
+  nowTlNow = rect(L, TL_X, 90, 2, 18, C_TEXT);
+  nowMeet = hudText(L, F_HUD, C_AMBER, "");
+  lv_obj_set_width(nowMeet, 210);
+  lv_label_set_long_mode(nowMeet, LV_LABEL_LONG_DOT);
+  lv_obj_set_pos(nowMeet, 10, 110);
 
-  lv_obj_t* m = box(s, 236, 46, 230, 120);
-  caption(m, LV_SYMBOL_BELL "  NEXT MEETING");
-  nowMeetTitle = text(m, F_TITLE, C_TEXT, "");
-  lv_obj_set_width(nowMeetTitle, 204);
-  lv_label_set_long_mode(nowMeetTitle, LV_LABEL_LONG_DOT);
-  lv_obj_set_pos(nowMeetTitle, 0, 24);
-  nowMeetTime = text(m, F_BODY, C_AMBER, "");
-  lv_obj_set_pos(nowMeetTime, 0, 52);
-  nowMeetWhere = text(m, F_SMALL, C_MUTED, "");
-  lv_obj_set_width(nowMeetWhere, 204);
-  lv_label_set_long_mode(nowMeetWhere, LV_LABEL_LONG_DOT);
-  lv_obj_set_pos(nowMeetWhere, 0, 76);
+  lv_obj_t* R = panel(s, 240, CONTENT_Y, 234, 130, 8, C_LINE, true);
+  nowSprint = hudText(R, F_HUD_M, C_TEXT, "");
+  lv_obj_set_width(nowSprint, 120);
+  lv_label_set_long_mode(nowSprint, LV_LABEL_LONG_DOT);
+  lv_obj_set_pos(nowSprint, 10, 6);
+  lv_obj_set_pos(hudText(R, F_HUD, C_MUTED, "SPRINT PROGRESS"), 10, 26);
+  lv_color_t legColors[4] = {C_LIME, C_VIOLET, C_CYAN, C_ICE};
+  for (int i = 0; i < 4; i++) {
+    rect(R, 10, 50 + i * 14, 6, 6, legColors[i]);
+    nowLeg[i] = hudText(R, F_HUD, C_MUTED, "");
+    lv_obj_set_pos(nowLeg[i], 20, 45 + i * 14);
+  }
+  nowDays = hudText(R, F_HUD, C_AMBER, "");
+  lv_obj_set_pos(nowDays, 10, 108);
+  makeRing(nowRing, R, 128, 16, 96, 9);
 
-  lv_obj_t* w = box(s, 14, 178, 452, 128);
-  caption(w, LV_SYMBOL_PLAY "  WORKING ON");
-  nowWorkKey = text(w, F_BIG, C_ACCENT, "");
-  lv_obj_set_pos(nowWorkKey, 0, 24);
-  nowWorkStatus = text(w, F_SMALL, C_ACCENT, "");
-  lv_obj_align(nowWorkStatus, LV_ALIGN_TOP_RIGHT, 0, 0);
-  nowWorkTitle = text(w, F_TITLE, C_TEXT, "");
-  lv_obj_set_width(nowWorkTitle, 426);
-  lv_label_set_long_mode(nowWorkTitle, LV_LABEL_LONG_DOT);
-  lv_obj_set_pos(nowWorkTitle, 0, 66);
+  nowRows = plain(s, 6, 176, 468, 90);
 }
 
 static void buildSprint() {
   lv_obj_t* s = screens[PG_SPRINT] = newScreen();
-  lv_obj_t* left = box(s, 14, 46, 196, 260);
+  lv_obj_t* L = panel(s, 6, CONTENT_Y, 200, 222, 8, C_LINE, true);
+  makeRing(spRing, L, 25, 14, 150, 14);
+  spFoot = hudText(L, F_HUD, C_MUTED, "");
+  lv_obj_set_pos(spFoot, 12, 176);
+  spDays = hudText(L, F_HUD_M, C_AMBER, "");
+  lv_obj_set_pos(spDays, 12, 194);
 
-  spArc = lv_arc_create(left);
-  lv_obj_set_size(spArc, 168, 168);
-  lv_obj_align(spArc, LV_ALIGN_TOP_MID, 0, 0);
-  lv_arc_set_bg_angles(spArc, 135, 45);
-  lv_arc_set_range(spArc, 0, 100);
-  lv_arc_set_value(spArc, 0);
-  lv_obj_remove_style(spArc, nullptr, LV_PART_KNOB);
-  lv_obj_remove_flag(spArc, LV_OBJ_FLAG_CLICKABLE);
-  lv_obj_set_style_arc_width(spArc, 14, LV_PART_MAIN);
-  lv_obj_set_style_arc_color(spArc, C_BORDER, LV_PART_MAIN);
-  lv_obj_set_style_arc_width(spArc, 14, LV_PART_INDICATOR);
-  lv_obj_set_style_arc_color(spArc, C_ACCENT, LV_PART_INDICATOR);
-  lv_obj_set_style_arc_rounded(spArc, true, LV_PART_INDICATOR);
-
-  spPct = text(spArc, F_BIG, C_TEXT, "0%");
-  lv_obj_align(spPct, LV_ALIGN_CENTER, 0, -8);
-  lv_obj_t* l = caption(spArc, "POINTS DONE");
-  lv_obj_align(l, LV_ALIGN_CENTER, 0, 20);
-  spPts = text(left, F_TITLE, C_TEXT, "");
-  lv_obj_align(spPts, LV_ALIGN_BOTTOM_MID, 0, -28);
-  spFoot = text(left, F_SMALL, C_MUTED, "");
-  lv_obj_align(spFoot, LV_ALIGN_BOTTOM_MID, 0, 0);
-
-  lv_obj_t* right = box(s, 220, 46, 246, 260);
-  spName = text(right, F_TITLE, C_TEXT, "");
-  lv_obj_set_width(spName, 220);
+  lv_obj_t* R = panel(s, 212, CONTENT_Y, 262, 222, 8, C_LINE, true);
+  spName = hudText(R, F_HUD_M, C_TEXT, "");
+  lv_obj_set_width(spName, 240);
   lv_label_set_long_mode(spName, LV_LABEL_LONG_DOT);
-  spDays = text(right, F_SMALL, C_AMBER, "");
-  lv_obj_set_pos(spDays, 0, 26);
-
+  lv_obj_set_pos(spName, 10, 6);
+  lv_obj_set_pos(hudText(R, F_HUD, C_MUTED, "STATUS"), 10, 28);
   for (int i = 0; i < 4; i++) {
-    int y = 52 + i * 24;
-    spBarLbl[i] = text(right, F_SMALL, C_MUTED, "");
-    lv_obj_set_pos(spBarLbl[i], 0, y);
-    spBars[i] = lv_bar_create(right);
-    lv_obj_set_size(spBars[i], 120, 8);
-    lv_obj_set_pos(spBars[i], 100, y + 5);
-    lv_obj_set_style_bg_color(spBars[i], C_BORDER, LV_PART_MAIN);
+    int y = 46 + i * 20;
+    spBarLbl[i] = hudText(R, F_HUD, C_MUTED, "");
+    lv_obj_set_pos(spBarLbl[i], 10, y);
+    spBars[i] = lv_bar_create(R);
+    lv_obj_set_size(spBars[i], 128, 6);
+    lv_obj_set_pos(spBars[i], 120, y + 5);
+    lv_obj_set_style_radius(spBars[i], 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(spBars[i], 0, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(spBars[i], C_DIM, LV_PART_MAIN);
     lv_obj_set_style_bg_color(spBars[i], catColor((CardCat)i, false), LV_PART_INDICATOR);
   }
-
-  lv_obj_t* bc = caption(right, "BURNDOWN");
-  lv_obj_set_pos(bc, 0, 152);
-  spChart = lv_chart_create(right);
-  lv_obj_set_size(spChart, 222, 64);
-  lv_obj_set_pos(spChart, 0, 172);
+  lv_obj_set_pos(hudText(R, F_HUD, C_MUTED, "BURNDOWN"), 10, 130);
+  spChart = lv_chart_create(R);
+  lv_obj_set_size(spChart, 240, 66);
+  lv_obj_set_pos(spChart, 10, 148);
   lv_chart_set_type(spChart, LV_CHART_TYPE_LINE);
   lv_chart_set_div_line_count(spChart, 0, 0);
   lv_obj_set_style_bg_opa(spChart, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(spChart, 0, 0);
+  lv_obj_set_style_radius(spChart, 0, 0);
   lv_obj_set_style_pad_all(spChart, 2, 0);
-  lv_obj_set_style_line_width(spChart, 3, LV_PART_ITEMS);
-  lv_obj_set_style_size(spChart, 6, 6, LV_PART_INDICATOR);
-  spIdeal = lv_chart_add_series(spChart, C_BORDER, LV_CHART_AXIS_PRIMARY_Y);
-  spSeries = lv_chart_add_series(spChart, C_ACCENT, LV_CHART_AXIS_PRIMARY_Y);
-  spBurnNote = text(right, F_SMALL, C_MUTED, "");
-  lv_obj_set_pos(spBurnNote, 0, 196);
-}
-
-static void legendItem(lv_obj_t* parent, const char* name, lv_color_t color) {
-  lv_obj_t* item = lv_obj_create(parent);
-  lv_obj_remove_style_all(item);
-  lv_obj_set_size(item, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(item, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(item, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  lv_obj_set_style_pad_column(item, 6, 0);
-  lv_obj_t* dot = lv_obj_create(item);
-  lv_obj_remove_style_all(dot);
-  lv_obj_set_size(dot, 10, 10);
-  lv_obj_set_style_radius(dot, 3, 0);
-  lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-  lv_obj_set_style_bg_color(dot, color, 0);
-  text(item, F_SMALL, C_MUTED, name);
+  lv_obj_set_style_line_width(spChart, 2, LV_PART_ITEMS);
+  lv_obj_set_style_size(spChart, 0, 0, LV_PART_INDICATOR);
+  spIdeal = lv_chart_add_series(spChart, C_LINE, LV_CHART_AXIS_PRIMARY_Y);
+  spSeries = lv_chart_add_series(spChart, C_CYAN, LV_CHART_AXIS_PRIMARY_Y);
+  spBurnNote = hudText(R, F_HUD, C_MUTED, "");
+  lv_obj_set_pos(spBurnNote, 10, 170);
 }
 
 static void buildCards() {
   lv_obj_t* s = screens[PG_CARDS] = newScreen();
-  lv_obj_t* legend = lv_obj_create(s);
-  lv_obj_remove_style_all(legend);
-  lv_obj_set_pos(legend, 16, 42);
-  lv_obj_set_size(legend, 448, 22);
-  lv_obj_set_flex_flow(legend, LV_FLEX_FLOW_ROW);
-  lv_obj_set_flex_align(legend, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-  legendItem(legend, "To Do", catColor(CAT_TODO, false));
-  legendItem(legend, "In Progress", catColor(CAT_PROGRESS, false));
-  legendItem(legend, "Review", catColor(CAT_REVIEW, false));
-  legendItem(legend, "Done", catColor(CAT_DONE, false));
-  legendItem(legend, "Blocked", C_RED);
-
-  // Viewport for one page of cards.
-  cardView = lv_obj_create(s);
-  lv_obj_remove_style_all(cardView);
-  lv_obj_set_pos(cardView, 14, 72);
-  lv_obj_set_size(cardView, 452, CARD_VIEW_H);
-  lv_obj_remove_flag(cardView, LV_OBJ_FLAG_SCROLLABLE);
-  cardList = lv_obj_create(cardView);
-  lv_obj_remove_style_all(cardList);
-  lv_obj_set_size(cardList, 452, LV_SIZE_CONTENT);
-  lv_obj_set_flex_flow(cardList, LV_FLEX_FLOW_COLUMN);
-  lv_obj_set_style_pad_row(cardList, 6, 0);
-  lv_obj_remove_flag(cardList, LV_OBJ_FLAG_SCROLLABLE);
+  cardList = plain(s, 6, CONTENT_Y, 468, 224);
 }
 
 static void buildKpi() {
   lv_obj_t* s = screens[PG_KPI] = newScreen();
   for (int i = 0; i < 6; i++) {
     int col = i % 3, row = i / 3;
-    lv_obj_t* t = box(s, 14 + col * 152, 46 + row * 132, 144, 124);
-    kpiLbl[i] = caption(t, "");
-    lv_obj_set_width(kpiLbl[i], 120);
+    lv_obj_t* t = panel(s, 6 + col * 158, CONTENT_Y + row * 112, 152, 106, 8, C_LINE, i == 0 || i == 5);
+    kpiLbl[i] = hudText(t, F_HUD, C_MUTED, "");
+    lv_obj_set_width(kpiLbl[i], 132);
     lv_label_set_long_mode(kpiLbl[i], LV_LABEL_LONG_DOT);
-    kpiVal[i] = text(t, F_HUGE, C_TEXT, "-");
-    lv_obj_align(kpiVal[i], LV_ALIGN_LEFT_MID, 0, 6);
-    kpiSub[i] = text(t, F_SMALL, C_MUTED, "");
-    lv_obj_align(kpiSub[i], LV_ALIGN_BOTTOM_LEFT, 0, 0);
+    lv_obj_set_pos(kpiLbl[i], 10, 6);
+    kpiVal[i] = text(t, F_CLOCK, C_TEXT, "-");
+    lv_obj_set_pos(kpiVal[i], 10, 24);
+    kpiSub[i] = hudText(t, F_HUD, C_MUTED, "");
+    lv_obj_set_width(kpiSub[i], 132);
+    lv_label_set_long_mode(kpiSub[i], LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(kpiSub[i], 10, 84);
   }
 }
 
 static void buildHealth() {
   lv_obj_t* s = screens[PG_HEALTH] = newScreen();
-  hlSummary = text(s, F_SMALL, C_MUTED, "");
-  lv_obj_align(hlSummary, LV_ALIGN_TOP_RIGHT, -16, 44);
-  hlGrid = lv_obj_create(s);
-  lv_obj_remove_style_all(hlGrid);
-  lv_obj_set_pos(hlGrid, 14, 66);
-  lv_obj_set_size(hlGrid, 452, 244);
-  lv_obj_set_flex_flow(hlGrid, LV_FLEX_FLOW_ROW_WRAP);
-  lv_obj_set_style_pad_row(hlGrid, 8, 0);
-  lv_obj_set_style_pad_column(hlGrid, 8, 0);
-  lv_obj_remove_flag(hlGrid, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_pos(hudText(s, F_HUD, C_MUTED, "UPTIME KUMA // SERVICES"), 12, CONTENT_Y + 2);
+  hlSummary = hudText(s, F_HUD, C_MUTED, "");
+  lv_obj_align(hlSummary, LV_ALIGN_TOP_RIGHT, -12, CONTENT_Y + 2);
+  hlGrid = plain(s, 6, CONTENT_Y + 20, 468, 204);
 }
 
 // ---------- refresh screen ----------
@@ -383,49 +531,56 @@ static lv_obj_t *loadIcon[STEP_COUNT], *loadDetail[STEP_COUNT], *loadTitle;
 static bool dashboardBuilt = false;
 
 static void buildLoading() {
-  static const char* names[STEP_COUNT] = {"Jira cards", "Sprint dates", "KPI queries", "Uptime Kuma", "Calendar"};
+  static const char* names[STEP_COUNT] = {"JIRA CARDS", "SPRINT DATES", "KPI QUERIES", "UPTIME KUMA", "CALENDAR"};
   loadScreen = newScreen();
-  loadTitle = text(loadScreen, F_TITLE, C_TEXT, "Refreshing data");
-  lv_obj_set_pos(loadTitle, 24, 22);
+  reactor(loadScreen, 12, 8, 46, false);
+  lv_obj_t* t = hudText(loadScreen, F_HUD_L, C_CYAN, "F.R.I.D.A.Y.");
+  lv_obj_set_style_text_letter_space(t, 3, 0);
+  lv_obj_set_pos(t, 70, 10);
+  loadTitle = hudText(loadScreen, F_HUD, C_MUTED, "SYNCING DATA");
+  lv_obj_set_pos(loadTitle, 72, 38);
   for (int i = 0; i < STEP_COUNT; i++) {
-    lv_obj_t* row = box(loadScreen, 20, 62 + i * 50, 440, 44);
-    lv_obj_set_style_pad_ver(row, 0, 0);
-    loadIcon[i] = text(row, F_TITLE, C_MUTED, LV_SYMBOL_DUMMY);
-    lv_obj_align(loadIcon[i], LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t* name = text(row, F_BODY, C_TEXT, names[i]);
-    lv_obj_align(name, LV_ALIGN_LEFT_MID, 32, 0);
-    loadDetail[i] = text(row, F_SMALL, C_MUTED, "");
-    lv_obj_set_width(loadDetail[i], 250);
+    lv_obj_t* row = panel(loadScreen, 6, 64 + i * 50, 468, 44, 6);
+    loadIcon[i] = text(row, F_HUD_M, C_MUTED, "");
+    lv_obj_set_pos(loadIcon[i], 12, 12);
+    lv_obj_set_pos(hudText(row, F_HUD_M, C_TEXT, names[i]), 40, 12);
+    loadDetail[i] = hudText(row, F_HUD, C_MUTED, "");
+    lv_obj_set_width(loadDetail[i], 240);
     lv_label_set_long_mode(loadDetail[i], LV_LABEL_LONG_DOT);
     lv_obj_set_style_text_align(loadDetail[i], LV_TEXT_ALIGN_RIGHT, 0);
-    lv_obj_align(loadDetail[i], LV_ALIGN_RIGHT_MID, 0, 0);
+    lv_obj_set_pos(loadDetail[i], 216, 15);
   }
 }
 
 static void onProgress(FetchStep step, StepState state, const String& detail) {
-  static const char* icons[] = {LV_SYMBOL_DUMMY, LV_SYMBOL_REFRESH, LV_SYMBOL_OK, LV_SYMBOL_CLOSE, LV_SYMBOL_MINUS};
-  lv_color_t colors[] = {C_MUTED, C_ACCENT, C_GREEN, C_RED, C_MUTED};
+  static const char* icons[] = {"", LV_SYMBOL_REFRESH, LV_SYMBOL_OK, LV_SYMBOL_CLOSE, LV_SYMBOL_MINUS};
+  lv_color_t colors[] = {C_MUTED, C_CYAN, C_LIME, C_RED, C_MUTED};
   lv_label_set_text(loadIcon[step], icons[state]);
   lv_obj_set_style_text_color(loadIcon[step], colors[state], 0);
-  lv_label_set_text(loadDetail[step], state == STEP_RUN ? "loading..." : detail.c_str());
-  lv_obj_set_style_text_color(loadDetail[step], state == STEP_FAIL ? C_RED : C_MUTED, 0);
+  String d = state == STEP_RUN ? String("LOADING...") : detail;
+  lv_label_set_text(loadDetail[step], d.c_str());
+  lv_obj_set_style_text_color(loadDetail[step], state == STEP_FAIL ? C_RED : C_ICE, 0);
   lv_refr_now(nullptr);  // draw now: the next fetch blocks the loop
 }
 
 void ui_init() {
   bootScreen = newScreen();
-  lv_obj_t* logo = text(bootScreen, F_HUGE, C_ACCENT, LV_SYMBOL_LIST);
-  lv_obj_align(logo, LV_ALIGN_CENTER, 0, -60);
-  bootTitle = text(bootScreen, F_TITLE, C_TEXT, "Jira Status");
-  lv_obj_align(bootTitle, LV_ALIGN_CENTER, 0, 0);
-  bootDetail = text(bootScreen, F_SMALL, C_MUTED, "");
-  lv_obj_set_width(bootDetail, 420);
+  reactor(bootScreen, (SCREEN_W - 110) / 2, 26, 110, true);
+  lv_obj_t* name = hudText(bootScreen, F_HUD_L, C_CYAN, "F.R.I.D.A.Y.");
+  lv_obj_set_style_text_letter_space(name, 4, 0);
+  lv_obj_align(name, LV_ALIGN_TOP_MID, 0, 150);
+  bootTitle = hudText(bootScreen, F_HUD_M, C_TEXT, "");
+  lv_obj_align(bootTitle, LV_ALIGN_TOP_MID, 0, 186);
+  bootDetail = hudText(bootScreen, F_HUD, C_ICE, "");
+  lv_obj_set_width(bootDetail, 440);
   lv_obj_set_style_text_align(bootDetail, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(bootDetail, LV_ALIGN_CENTER, 0, 50);
+  lv_label_set_long_mode(bootDetail, LV_LABEL_LONG_WRAP);
+  lv_obj_align(bootDetail, LV_ALIGN_TOP_MID, 0, 214);
   lv_screen_load(bootScreen);
 
   buildLoading();
-  buildTopBar();
+  buildHeader();
+  buildTabBar();
   buildBanner();
 }
 
@@ -441,7 +596,10 @@ static void buildDashboard() {
 }
 
 void ui_boot(const String& title, const String& detail) {
-  lv_label_set_text(bootTitle, title.c_str());
+  String t = title;
+  t.toUpperCase();
+  lv_label_set_text(bootTitle, t.c_str());
+  lv_obj_align(bootTitle, LV_ALIGN_TOP_MID, 0, 186);
   lv_label_set_text(bootDetail, detail.c_str());
   lv_timer_handler();
 }
@@ -456,58 +614,94 @@ static const Card* currentCard() {
   return nullptr;
 }
 
+// Second row on the home screen: what needs attention next (blocked, then review, then to do).
+static const Card* urgentCard(const Card* skip) {
+  const SprintData& s = snap.sprint;
+  for (int pass = 0; pass < 3; pass++)
+    for (int i = 0; i < s.count; i++) {
+      const Card& c = s.cards[i];
+      if (&c == skip) continue;
+      if ((pass == 0 && c.blocked) || (pass == 1 && c.cat == CAT_REVIEW) || (pass == 2 && c.cat == CAT_TODO)) return &c;
+    }
+  return nullptr;
+}
+
 static const Meeting* nextMeeting(time_t now) {
   for (int i = 0; i < snap.meet.count; i++)
     if (snap.meet.m[i].end > now) return &snap.meet.m[i];
   return nullptr;
 }
 
-static void renderNow(time_t now) {
+// Minute-level parts of the home screen: next meeting line and the "now" marker.
+static void renderNowTime(time_t now) {
   const Meeting* m = nextMeeting(now);
   if (m) {
-    lv_label_set_text(nowMeetTitle, m->title.c_str());
     long mins = (m->start - now) / 60;
-    String when = hhmm(m->start) + " - " + hhmm(m->end);
-    if (m->start > now) when += mins >= 60 ? "  ·  in " + String(mins / 60) + "h " + String(mins % 60) + "m" : "  ·  in " + String(mins) + " min";
-    else when += "  ·  now";
-    lv_label_set_text(nowMeetTime, when.c_str());
-    lv_label_set_text(nowMeetWhere, m->where.c_str());
+    String when = m->start > now ? (mins >= 60 ? "IN " + String(mins / 60) + "H " + String(mins % 60) + "M" : "IN " + String(mins) + "M") : String("NOW");
+    String line = m->title + "  " + hhmm(m->start) + " · " + when + (m->where.length() ? " · " + m->where : "");
+    lv_label_set_text(nowMeet, line.c_str());
+    lv_obj_set_style_text_color(nowMeet, m->start - now <= MEETING_SOON_SEC ? C_AMBER : C_ICE, 0);
   } else {
-    lv_label_set_text(nowMeetTitle, snap.meet.configured ? "No more meetings" : "Calendar not set");
-    lv_label_set_text(nowMeetTime, snap.meet.configured ? "Enjoy the focus time" : "Add an .ics URL on the web page");
-    lv_label_set_text(nowMeetWhere, "");
+    lv_label_set_text(nowMeet, snap.meet.configured ? "NO MORE MEETINGS TODAY" : "CALENDAR NOT SET");
+    lv_obj_set_style_text_color(nowMeet, C_MUTED, 0);
   }
+  lv_obj_set_x(nowTlNow, TL_X + tlX(now) - 1);
+}
 
-  const Card* c = currentCard();
-  lv_label_set_text(nowWorkKey, c ? c->key.c_str() : "Nothing in progress");
-  lv_label_set_text(nowWorkTitle, c ? c->title.c_str() : "Pick a card from the sprint");
-  lv_label_set_text(nowWorkStatus, c ? c->status.c_str() : "");
-  if (c) lv_obj_set_style_text_color(nowWorkStatus, catColor(c->cat, c->blocked), 0);
+static void renderNow(time_t now) {
+  // Timeline blocks: one per meeting today; the next one is amber.
+  lv_obj_clean(nowTlBar);
+  const Meeting* next = nextMeeting(now);
+  for (int i = 0; i < snap.meet.count; i++) {
+    const Meeting& m = snap.meet.m[i];
+    int x0 = tlX(m.start), x1 = max(x0 + 3, tlX(m.end));
+    rect(nowTlBar, x0, 0, x1 - x0, 10, &m == next ? C_AMBER : C_LINE);
+  }
+  renderNowTime(now);
 
   const SprintData& s = snap.sprint;
-  if (s.ok && s.ptsTotal > 0) {
-    String mini = String((int)(100 * s.ptsDone / s.ptsTotal)) + "% of sprint done";
-    if (snap.mock) mini += "  (demo)";
-    else if (s.updated) mini += "\nUpdated " + hhmm(s.updated);
-    lv_label_set_text(nowMini, mini.c_str());
+  lv_label_set_text(nowSprint, s.name.c_str());
+  int counts[4] = {}, open = 0;
+  for (int i = 0; i < s.count; i++) {
+    counts[s.cards[i].cat]++;
+    if (s.cards[i].cat != CAT_DONE) open++;
+  }
+  lv_label_set_text_fmt(nowLeg[0], "DONE %d", counts[CAT_DONE]);
+  lv_label_set_text_fmt(nowLeg[1], "REVIEW %d", counts[CAT_REVIEW]);
+  lv_label_set_text_fmt(nowLeg[2], "DOING %d", counts[CAT_PROGRESS]);
+  lv_label_set_text_fmt(nowLeg[3], "TODO %d", counts[CAT_TODO]);
+  if (s.endTs) {
+    long days = (s.endTs - now + 86399) / 86400;
+    lv_label_set_text(nowDays, days > 0 ? (String(days) + (days == 1 ? " DAY LEFT" : " DAYS LEFT")).c_str() : "SPRINT ENDED");
   } else {
-    lv_label_set_text(nowMini, s.err.c_str());
+    lv_label_set_text(nowDays, snap.mock ? "DEMO DATA" : "");
+  }
+  setRing(nowRing, s);
+
+  lv_obj_clean(nowRows);
+  const Card* c = currentCard();
+  const Card* u = urgentCard(c);
+  if (!s.ok) {
+    errorText(nowRows, 6, 6, ("JIRA: " + s.err).c_str());
+  } else if (!c && !u) {
+    errorText(nowRows, 6, 6, "NO ACTIVE CARDS · PICK ONE FROM THE SPRINT");
+  } else {
+    int y = 0;
+    if (c) { ticketRow(nowRows, 0, y, 468, *c); y += 46; }
+    if (u) ticketRow(nowRows, 0, y, 468, *u);
   }
 }
 
 static void renderSprint(time_t now) {
   const SprintData& s = snap.sprint;
-  int pct = s.ptsTotal > 0 ? (int)(100 * s.ptsDone / s.ptsTotal + 0.5f) : 0;
-  lv_arc_set_value(spArc, pct);
-  lv_label_set_text_fmt(spPct, "%d%%", pct);
-  lv_label_set_text(spPts, (fmtPts(s.ptsDone) + " / " + fmtPts(s.ptsTotal) + " pts").c_str());
+  setRing(spRing, s);
   lv_label_set_text(spName, s.name.c_str());
   if (s.endTs) {
     long days = (s.endTs - now + 86399) / 86400;
-    lv_label_set_text(spDays, days > 0 ? (String(days) + (days == 1 ? " day left" : " days left")).c_str() : "Sprint ended");
+    lv_label_set_text(spDays, days > 0 ? (String(days) + (days == 1 ? " DAY LEFT" : " DAYS LEFT")).c_str() : "SPRINT ENDED");
     lv_obj_set_style_text_color(spDays, days <= 2 ? C_RED : C_AMBER, 0);
   } else {
-    lv_label_set_text(spDays, "Set the board id for the end date");
+    lv_label_set_text(spDays, "NO END DATE");
   }
 
   int counts[4] = {}, blocked = 0;
@@ -516,19 +710,19 @@ static void renderSprint(time_t now) {
     if (s.cards[i].blocked) blocked++;
   }
   for (int i = 0; i < 4; i++) {
-    lv_label_set_text_fmt(spBarLbl[i], "%s  %d", catName((CardCat)i), counts[i]);
+    lv_label_set_text_fmt(spBarLbl[i], "%s %d", catName((CardCat)i, false), counts[i]);
     lv_bar_set_range(spBars[i], 0, max(1, s.count));
-    lv_bar_set_value(spBars[i], counts[i], LV_ANIM_ON);
+    lv_bar_set_value(spBars[i], counts[i], LV_ANIM_OFF);
   }
-  String foot = String(s.count) + " cards";
-  if (blocked) foot += "  ·  " + String(blocked) + " blocked";
+  String foot = String(s.count) + " CARDS";
+  if (blocked) foot += " · " + String(blocked) + " BLOCKED";
   lv_label_set_text(spFoot, foot.c_str());
 
   // Burndown from Jira itself: points remaining at the end of each sprint day,
-  // from when each done card was resolved. Grey line = ideal.
+  // from when each done card was resolved. Dim line = ideal.
   if (!s.startTs || !s.endTs || s.endTs <= s.startTs) {
     lv_obj_add_flag(spChart, LV_OBJ_FLAG_HIDDEN);
-    lv_label_set_text(spBurnNote, "Set the board id to see it");
+    lv_label_set_text(spBurnNote, "SET THE BOARD ID TO SEE IT");
     return;
   }
   lv_obj_remove_flag(spChart, LV_OBJ_FLAG_HIDDEN);
@@ -567,39 +761,22 @@ static lv_timer_t* cardTimer = nullptr;
 static int cardPages() { return max(1, (cardOrderLen + CARDS_PER_PAGE - 1) / CARDS_PER_PAGE); }
 
 static void cardTitle() {
-  if (page != PG_CARDS) return;
-  if (cardPages() > 1) lv_label_set_text_fmt(topTitle, "My cards  %d/%d", cardPage + 1, cardPages());
-  else lv_label_set_text(topTitle, PAGE_TITLES[PG_CARDS]);
+  String t = String(PAGE_ICONS[PG_CARDS]) + " " + PAGE_TITLES[PG_CARDS];
+  if (cardPages() > 1) t += " " + String(cardPage + 1) + "/" + String(cardPages());
+  lv_label_set_text(tabLbl[PG_CARDS], t.c_str());
 }
 
 static void drawCardPage() {
   lv_obj_clean(cardList);
   const SprintData& s = snap.sprint;
   if (!s.count || !cardOrderLen) {
-    errorText(cardList, !s.ok ? ("Jira: " + s.err).c_str() : s.count ? "All cards are done" : "No cards in this sprint");
+    errorText(cardList, 6, 6, !s.ok ? ("JIRA: " + s.err).c_str() : s.count ? "ALL CARDS ARE DONE" : "NO CARDS IN THIS SPRINT");
+    cardTitle();
     return;
   }
   int first = cardPage * CARDS_PER_PAGE;
-  for (int n = first; n < cardOrderLen && n < first + CARDS_PER_PAGE; n++) {
-    const Card& c = s.cards[cardOrder[n]];
-    lv_color_t col = catColor(c.cat, c.blocked);
-    // Tinted row in the status color.
-    lv_obj_t* row = box(cardList, 0, 0, 452, 38, lv_color_mix(col, C_CARD, 48));
-    lv_obj_set_style_pad_ver(row, 0, 0);
-    lv_obj_set_style_radius(row, 10, 0);
-    // Status stripe = thick left border (one object less per row; RAM is tight).
-    lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
-    lv_obj_set_style_border_width(row, 5, 0);
-    lv_obj_set_style_border_color(row, col, 0);
-    lv_obj_t* key = text(row, F_BODY, col, c.key.c_str());
-    lv_obj_align(key, LV_ALIGN_LEFT_MID, 4, 0);
-    lv_obj_t* title = text(row, F_BODY, c.cat == CAT_DONE ? C_MUTED : C_TEXT, c.title.c_str());
-    lv_obj_set_width(title, 270);
-    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_align(title, LV_ALIGN_LEFT_MID, 106, 0);
-    lv_obj_t* pts = text(row, F_SMALL, C_TEXT, (fmtPts(c.pts) + " pt").c_str());
-    lv_obj_align(pts, LV_ALIGN_RIGHT_MID, 0, 0);
-  }
+  for (int n = first; n < cardOrderLen && n < first + CARDS_PER_PAGE; n++)
+    ticketRow(cardList, 0, (n - first) * 45, 468, s.cards[cardOrder[n]]);
   cardTitle();
 }
 
@@ -653,22 +830,22 @@ static void renderKpi() {
     if (c.cat != CAT_DONE) open++;
   }
   int pct = s.ptsTotal > 0 ? (int)(100 * s.ptsDone / s.ptsTotal + 0.5f) : 0;
-  setKpi(0, "POINTS DONE", fmtPts(s.ptsDone), "of " + fmtPts(s.ptsTotal) + " pts", C_GREEN);
-  setKpi(1, "SPRINT SCOPE", String(pct) + "%", String(open) + " cards open", C_ACCENT);
-  setKpi(2, "WIP", String(inProg + review), String(inProg) + " doing · " + String(review) + " review", inProg + review > 3 ? C_AMBER : C_TEXT);
-  setKpi(3, "BLOCKED", String(blocked), blocked ? "needs attention" : "all clear", blocked ? C_RED : C_GREEN);
+  setKpi(0, "POINTS DONE", fmtPts(s.ptsDone), "OF " + fmtPts(s.ptsTotal) + " PTS", C_LIME);
+  setKpi(1, "SPRINT SCOPE", String(pct) + "%", String(open) + " CARDS OPEN", C_CYAN);
+  setKpi(2, "WIP", String(inProg + review), String(inProg) + " DOING · " + String(review) + " REVIEW", inProg + review > 3 ? C_AMBER : C_TEXT);
+  setKpi(3, "BLOCKED", String(blocked), blocked ? "NEEDS ATTENTION" : "ALL CLEAR", blocked ? C_AMBER : C_LIME);
   String k1 = gCfg.kpi1Label, k2 = gCfg.kpi2Label;
   k1.toUpperCase();
   k2.toUpperCase();
-  setKpi(4, k1, s.kpi1 < 0 ? "-" : String(s.kpi1), "Jira query", s.kpi1 > 0 ? C_AMBER : C_TEXT);
-  setKpi(5, k2, s.kpi2 < 0 ? "-" : String(s.kpi2), "Jira query", s.kpi2 > 0 ? C_RED : C_GREEN);
+  setKpi(4, k1, s.kpi1 < 0 ? "-" : String(s.kpi1), "JIRA QUERY", s.kpi1 > 0 ? C_AMBER : C_TEXT);
+  setKpi(5, k2, s.kpi2 < 0 ? "-" : String(s.kpi2), "JIRA QUERY", s.kpi2 > 0 ? C_RED : C_LIME);
 }
 
 static void renderHealth() {
   lv_obj_clean(hlGrid);
   const HealthData& h = snap.health;
   if (!h.ok && !h.count) {
-    errorText(hlGrid, h.err.length() ? ("Kuma: " + h.err).c_str() : "Loading...");
+    errorText(hlGrid, 6, 6, h.err.length() ? ("KUMA: " + h.err).c_str() : "LOADING...");
     lv_label_set_text(hlSummary, "");
     return;
   }
@@ -676,31 +853,27 @@ static void renderHealth() {
   int upN = 0;
   for (int i = 0; i < h.count && i < 8; i++) {
     const Monitor& m = h.m[i];
-    lv_obj_t* t = box(hlGrid, 0, 0, 222, 54);
-    lv_obj_set_style_pad_ver(t, 6, 0);
-    if (!m.up) lv_obj_set_style_border_color(t, C_RED, 0);
-    lv_obj_t* dot = lv_obj_create(t);
-    lv_obj_remove_style_all(dot);
-    lv_obj_set_size(dot, 12, 12);
-    lv_obj_set_style_radius(dot, 6, 0);
-    lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
-    lv_obj_set_style_bg_color(dot, m.up ? C_GREEN : C_RED, 0);
-    lv_obj_align(dot, LV_ALIGN_LEFT_MID, 0, 0);
+    lv_obj_t* t = panel(hlGrid, (i % 2) * 237, (i / 2) * 52, 231, 46, 6, m.up ? C_LINE : C_RED);
+    rect(t, 10, 10, 8, 8, m.up ? C_LIME : C_RED, LV_RADIUS_CIRCLE);
     // Long monitor names (e.g. "CRM-CheckedCache-LoginTest") use the small font so they fit the tile.
-    lv_obj_t* name = text(t, m.name.length() > 20 ? F_SMALL : F_BODY, C_TEXT, m.name.c_str());
-    lv_obj_set_width(name, 192);
+    lv_obj_t* name = hudText(t, m.name.length() > 18 ? F_HUD : F_HUD_M, m.up ? C_TEXT : C_RED, m.name.c_str());
+    lv_obj_set_width(name, 196);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    lv_obj_align(name, LV_ALIGN_TOP_LEFT, 22, 0);
-    String sub = m.up ? (m.ping >= 0 ? String(m.ping) + " ms" : String("up")) : String("DOWN");
-    if (m.uptime >= 0) sub += "  ·  " + String(m.uptime * 100, 1) + "%";
-    text(t, F_SMALL, m.up ? C_MUTED : C_RED, sub.c_str());
-    lv_obj_align(lv_obj_get_child(t, -1), LV_ALIGN_BOTTOM_LEFT, 22, 0);
-    if (m.uptime >= 0) { upSum += m.uptime; upN++; }
+    lv_obj_set_pos(name, 26, 4);
+    String sub = m.up ? (m.ping >= 0 ? String(m.ping) + " MS" : String("UP")) : String("DOWN");
+    if (m.uptime >= 0) sub += " · " + String(m.uptime * 100, 1) + "%";
+    lv_obj_set_pos(hudText(t, F_HUD, m.up ? C_MUTED : C_RED, sub.c_str()), 26, 26);
+    if (m.uptime >= 0) {
+      rect(t, 150, 32, 70, 3, C_DIM);
+      rect(t, 150, 32, max(1, (int)(70 * m.uptime)), 3, m.uptime > 0.99f ? C_LIME : m.uptime > 0.9f ? C_AMBER : C_RED);
+      upSum += m.uptime;
+      upN++;
+    }
   }
-  String sum = String(h.up) + "/" + String(h.count) + " up";
-  if (upN) sum += "  ·  24h " + String(100 * upSum / upN, 2) + "%";
+  String sum = String(h.up) + "/" + String(h.count) + " UP";
+  if (upN) sum += " · 24H " + String(100 * upSum / upN, 2) + "%";
   lv_label_set_text(hlSummary, sum.c_str());
-  lv_obj_set_style_text_color(hlSummary, h.up == h.count ? C_GREEN : C_RED, 0);
+  lv_obj_set_style_text_color(hlSummary, h.up == h.count ? C_LIME : C_RED, 0);
 }
 
 static void renderAll(time_t now) {
@@ -712,79 +885,161 @@ static void renderAll(time_t now) {
   renderHealth();
   const HealthData& h = snap.health;
   if (h.count) {
-    lv_label_set_text_fmt(topHealth, "%s %d/%d", h.up == h.count ? LV_SYMBOL_OK : LV_SYMBOL_WARNING, h.up, h.count);
-    lv_obj_set_style_text_color(topHealth, h.up == h.count ? C_GREEN : C_RED, 0);
+    lv_label_set_text_fmt(hdHealth, "%s %d/%d", h.up == h.count ? LV_SYMBOL_OK : LV_SYMBOL_WARNING, h.up, h.count);
+    lv_obj_set_style_text_color(hdHealth, h.up == h.count ? C_LIME : C_RED, 0);
+  } else {
+    lv_label_set_text(hdHealth, "");
   }
 }
 
-// ---------- banner: meeting soon / meeting started / outage ----------
+// ---------- alerts: meeting soon / meeting live / outage ----------
+// Same rules as before; when several are active the banner rotates through them every 4 s
+// and shows a "1/2" counter.
 
 enum { BN_NONE, BN_SOON, BN_STARTED, BN_DOWN };
+struct Alert { int mode; String tag, text, right; };
+static const int MAX_ALERTS = 6;
+static Alert alerts[MAX_ALERTS];
+static int alertCount = 0, alertIdx = 0;
+static uint32_t alertShownAt = 0;
 
-static void showBanner(int mode, const String& title, const String& sub) {
-  if (mode == BN_NONE) {
-    if (bannerMode != BN_NONE) {
-      lv_anim_delete(banner, pulseCb);
-      lv_obj_add_flag(banner, LV_OBJ_FLAG_HIDDEN);
-    }
-    bannerMode = BN_NONE;
-    return;
-  }
-  lv_label_set_text(bannerText, title.c_str());
-  lv_label_set_text(bannerSub, sub.c_str());
+static void bnPulseCb(void*, int32_t v) {
+  lv_obj_set_style_bg_opa(bnBar, (lv_opa_t)v, 0);
+  lv_obj_set_style_line_opa(bnLine, (lv_opa_t)v, 0);
+}
+
+static void styleBanner(int mode) {
   if (mode == bannerMode) return;
   bannerMode = mode;
+  lv_anim_delete(banner, bnPulseCb);
+  if (mode == BN_NONE) {
+    lv_obj_add_flag(banner, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
   lv_obj_remove_flag(banner, LV_OBJ_FLAG_HIDDEN);
-  lv_anim_delete(banner, pulseCb);
-  lv_color_t bg = mode == BN_SOON ? C_AMBER : C_RED;
-  lv_color_t fg = mode == BN_SOON ? lv_color_black() : lv_color_white();
-  lv_obj_set_style_bg_color(banner, bg, 0);
-  lv_obj_set_style_bg_opa(banner, LV_OPA_COVER, 0);
-  for (lv_obj_t* l : {bannerIcon, bannerText, bannerSub}) lv_obj_set_style_text_color(l, fg, 0);
-  lv_label_set_text(bannerIcon, mode == BN_DOWN ? LV_SYMBOL_WARNING : LV_SYMBOL_BELL);
+  lv_color_t c = mode == BN_SOON ? C_AMBER : C_RED;
+  lv_obj_set_style_line_color(bnLine, c, 0);
+  lv_obj_set_style_line_opa(bnLine, LV_OPA_COVER, 0);
+  lv_obj_set_style_bg_color(bnBar, c, 0);
+  lv_obj_set_style_bg_opa(bnBar, LV_OPA_COVER, 0);
+  lv_obj_set_style_text_color(bnTag, c, 0);
+  lv_obj_set_style_text_color(bnRight, c, 0);
+  lv_obj_set_style_border_color(bnCount, c, 0);
+  lv_obj_set_style_text_color(bnCountLbl, c, 0);
   if (mode != BN_SOON) {
+    // Pulse only the outline and the accent bar: a few hundred pixels, cheap on the ILI9488.
     lv_anim_t a;
     lv_anim_init(&a);
     lv_anim_set_var(&a, banner);
-    lv_anim_set_values(&a, 150, 255);
+    lv_anim_set_values(&a, 90, 255);
     lv_anim_set_duration(&a, 700);
     lv_anim_set_playback_duration(&a, 700);
     lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-    lv_anim_set_exec_cb(&a, pulseCb);
+    lv_anim_set_exec_cb(&a, bnPulseCb);
     lv_anim_start(&a);
   }
 }
 
-static void updateBanner(time_t now) {
-  // A meeting that just started wins, then an outage, then a meeting about to start.
+static void addAlert(int mode, const String& tag, const String& text, const String& right) {
+  if (alertCount < MAX_ALERTS) alerts[alertCount++] = {mode, tag, text, right};
+}
+
+static void collectAlerts(time_t now) {
+  alertCount = 0;
   for (int i = 0; i < snap.meet.count; i++) {
     const Meeting& m = snap.meet.m[i];
     long since = now - m.start;
-    if (since >= 0 && since < MEETING_ALERT_SEC) {
-      char b[32];
-      snprintf(b, sizeof(b), "Started %ld:%02ld ago", since / 60, since % 60);
-      showBanner(BN_STARTED, m.title, String(b) + (m.where.length() ? "  ·  " + m.where : ""));
-      return;
-    }
+    if (since >= 0 && since < MEETING_ALERT_SEC)
+      addAlert(BN_STARTED, LV_SYMBOL_PLAY " MEETING LIVE", m.title + (m.where.length() ? " · " + m.where : ""), "+" + mmss(since));
   }
   const HealthData& h = snap.health;
   if (h.ok && h.up < h.count) {
     String names;
     for (int i = 0; i < h.count; i++)
       if (!h.m[i].up) names += (names.length() ? ", " : "") + h.m[i].name;
-    showBanner(BN_DOWN, String(h.count - h.up) + (h.count - h.up == 1 ? " service down" : " services down"), names);
-    return;
+    addAlert(BN_DOWN, LV_SYMBOL_WARNING " SERVICE DOWN", names, String(h.count - h.up) + "/" + String(h.count));
   }
   for (int i = 0; i < snap.meet.count; i++) {
     const Meeting& m = snap.meet.m[i];
     long until = m.start - now;
-    if (until > 0 && until <= MEETING_SOON_SEC) {
-      long mins = (until + 59) / 60;
-      showBanner(BN_SOON, m.title, "Starts in " + String(mins) + " min at " + hhmm(m.start) + (m.where.length() ? "  ·  " + m.where : ""));
-      return;
-    }
+    if (until > 0 && until <= MEETING_SOON_SEC)
+      addAlert(BN_SOON, LV_SYMBOL_BELL " NEXT MEETING · " + hhmm(m.start), m.title + (m.where.length() ? " · " + m.where : ""), mmss(until));
   }
-  showBanner(BN_NONE, "", "");
+}
+
+static void updateBanner(time_t now) {
+  collectAlerts(now);
+  if (!alertCount) {
+    styleBanner(BN_NONE);
+    alertIdx = 0;
+    return;
+  }
+  if (alertIdx >= alertCount) alertIdx = 0;
+  if (alertCount > 1 && millis() - alertShownAt >= 4000) {
+    alertIdx = (alertIdx + 1) % alertCount;
+    alertShownAt = millis();
+  }
+  const Alert& a = alerts[alertIdx];
+  styleBanner(a.mode);
+  lv_label_set_text(bnTag, a.tag.c_str());
+  lv_label_set_text(bnText, a.text.c_str());
+  lv_label_set_text(bnRight, a.right.c_str());
+  lv_obj_align(bnRight, LV_ALIGN_RIGHT_MID, -12, 0);
+  if (alertCount > 1) {
+    lv_obj_remove_flag(bnCount, LV_OBJ_FLAG_HIDDEN);
+    lv_label_set_text_fmt(bnCountLbl, "%d/%d", alertIdx + 1, alertCount);
+  } else {
+    lv_obj_add_flag(bnCount, LV_OBJ_FLAG_HIDDEN);
+  }
+}
+
+// ---------- header: F.R.I.D.A.Y. status line, health, WiFi, clock ----------
+
+static String fridayPhrase(const struct tm& lt) {
+  if (alertCount) {
+    const Alert& a = alerts[0];
+    if (a.mode == BN_DOWN) return a.right.substring(0, a.right.indexOf('/')) + " SERVICE(S) DOWN, " + gCfg.ownerName;
+    if (a.mode == BN_STARTED) return "YOU'RE LIVE, " + gCfg.ownerName;
+    return "MEETING IN " + a.right.substring(0, a.right.indexOf(':')) + " MIN";
+  }
+  const SprintData& s = snap.sprint;
+  switch ((millis() / 8000) % 4) {
+    case 0: {
+      int h = lt.tm_hour;
+      const char* g = h < 5 ? "LATE SHIFT, " : h < 12 ? "GOOD MORNING, " : h < 17 ? "GOOD AFTERNOON, " : h < 22 ? "GOOD EVENING, " : "LATE SHIFT, ";
+      return String(g) + gCfg.ownerName;
+    }
+    case 1:
+      if (snap.health.count) return snap.health.up == snap.health.count ? "ALL SYSTEMS NOMINAL" : "SYSTEMS DEGRADED";
+      return "HEALTH FEED OFFLINE";
+    case 2: {
+      if (!s.ok) return "JIRA LINK DOWN";
+      int open = 0;
+      for (int i = 0; i < s.count; i++) if (s.cards[i].cat != CAT_DONE) open++;
+      return String(open) + " CARDS IN FLIGHT";
+    }
+    default:
+      if (snap.mock) return "DEMO DATA";
+      return s.updated ? "SYNCED " + hhmm(s.updated) : "AWAITING SYNC";
+  }
+}
+
+static void updateHeader(time_t now, const struct tm& lt) {
+  char clock[8];
+  strftime(clock, sizeof(clock), "%H:%M", &lt);
+  lv_label_set_text(hdClock, clock);
+  String p = fridayPhrase(lt);
+  p.toUpperCase();
+  if (p != hdPhraseText) {
+    hdPhraseText = p;
+    lv_label_set_text(hdPhrase, p.c_str());
+    lv_obj_set_style_text_color(hdPhrase, alertCount ? (alerts[0].mode == BN_SOON ? C_AMBER : C_RED) : C_ICE, 0);
+  }
+  bool wifi = WiFi.status() == WL_CONNECTED;
+  int rssi = wifi ? WiFi.RSSI() : -100;
+  int bars = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : rssi > -85 ? 1 : 0;
+  for (int i = 0; i < 4; i++) lv_obj_set_style_bg_color(hdWifi[i], !wifi ? C_RED : i < bars ? C_CYAN : C_DIM, 0);
+  lv_obj_set_style_bg_color(hdDot, wifi ? C_LIME : C_RED, 0);
 }
 
 // ---------- loop ----------
@@ -794,21 +1049,18 @@ static void showPage(int p, bool animate) {
   LOG("page %s", PAGE_TITLES[p]);
   page = p;
   lv_screen_load_anim(screens[p], animate ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_NONE, animate ? 250 : 0, 0, false);
-  lv_label_set_text(topTitle, PAGE_TITLES[p]);
-  for (int i = 0; i < PG_COUNT; i++) {
-    lv_obj_set_style_bg_color(dots[i], i == p ? C_ACCENT : C_BORDER, 0);
-    lv_obj_set_width(dots[i], i == p ? 16 : 6);
-  }
+  for (int i = 0; i < PG_COUNT; i++) lv_obj_set_style_text_color(tabLbl[i], i == p ? C_CYAN : C_MUTED, 0);
+  lv_obj_set_x(tabLine, p * 94 + 19);
   if (p == PG_CARDS) startCardPages();
+  else cardTitle();
   lastSwitch = millis();
 }
 
-// The cards page stays until its list has scrolled through once.
+// The cards page stays until every page of cards has been shown once.
 static uint32_t pageDwellMs(int p) {
   uint32_t base = gCfg.rotateSec * 1000UL;
   return p == PG_CARDS ? max(base, cardsDwellMs) : base;
 }
-
 
 void ui_apply_settings() {
 #ifdef TFT_BL
@@ -833,17 +1085,17 @@ void ui_tick() {
     lastClock = millis();
     struct tm lt;
     localtime_r(&now, &lt);
-    char clock[8], date[32];
+    char clock[8], date[20];
     strftime(clock, sizeof(clock), "%H:%M", &lt);
-    strftime(date, sizeof(date), "%A, %d %B", &lt);
-    lv_label_set_text(topClock, clock);
+    strftime(date, sizeof(date), "%a %d %b", &lt);
+    String d = date;
+    d.toUpperCase();
     lv_label_set_text(nowClock, clock);
-    lv_label_set_text(nowDate, date);
+    lv_label_set_text(nowDate, d.c_str());
     lv_label_set_text(nowJalali, jalaliDate(lt).c_str());
-    bool wifi = WiFi.status() == WL_CONNECTED;
-    lv_obj_set_style_text_color(topWifi, wifi ? C_MUTED : C_RED, 0);
     updateBanner(now);
-    if (lt.tm_sec == 0) renderNow(now);  // meeting countdown
+    updateHeader(now, lt);
+    if (lt.tm_sec == 0) renderNowTime(now);  // meeting countdown and "now" marker
   }
 
   if (millis() - lastSwitch >= pageDwellMs(page))
@@ -853,9 +1105,10 @@ void ui_tick() {
 void ui_refresh(RefreshKind kind) {
   LOG("refresh: start (%s)", kind == REFRESH_FULL ? "full" : "kuma");
   started = false;
-  showBanner(BN_NONE, "", "");
-  lv_obj_add_flag(topBar, LV_OBJ_FLAG_HIDDEN);
-  lv_label_set_text(loadTitle, kind == REFRESH_FULL ? "Refreshing data" : "Checking services");
+  styleBanner(BN_NONE);
+  lv_obj_add_flag(header, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(tabBar, LV_OBJ_FLAG_HIDDEN);
+  lv_label_set_text(loadTitle, kind == REFRESH_FULL ? "SYNCING DATA" : "CHECKING SERVICES");
   for (int i = 0; i < STEP_COUNT; i++) onProgress((FetchStep)i, STEP_WAIT, "");
   lv_screen_load(loadScreen);
   // Free every dashboard object so the HTTPS handshakes get the RAM.
@@ -871,7 +1124,7 @@ void ui_refresh(RefreshKind kind) {
 
   fetch_all(onProgress, kind);
 
-  lv_label_set_text(loadTitle, LV_SYMBOL_OK "  Data ready");
+  lv_label_set_text(loadTitle, LV_SYMBOL_OK " DATA READY");
   lv_refr_now(nullptr);
   uint32_t until = millis() + 1500;
   while (millis() < until) { lv_timer_handler(); delay(5); }
@@ -883,8 +1136,10 @@ void ui_refresh(RefreshKind kind) {
   model_unlock();
   renderAll(time(nullptr));
   started = true;
-  lv_obj_remove_flag(topBar, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_remove_flag(header, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_remove_flag(tabBar, LV_OBJ_FLAG_HIDDEN);
+  hdPhraseText = "";
+  lastClock = 0;
   showPage(PG_NOW, false);
   LOG("refresh: done, loop stack left %u bytes", (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 }
-

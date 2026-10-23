@@ -20,6 +20,7 @@ struct Settings {
   uint8_t cardsPerPage; // cards slide: rows per page (1..5)
   uint8_t cardPageSec;  // cards slide: seconds per page
   bool hideDone;        // cards slide: leave out Done cards
+  String ownerName;     // F.R.I.D.A.Y. greets you by this name
   // Company WiFi, WPA2/WPA3-Enterprise with PEAP. Tried before the normal (WiFiManager) WiFi.
   String entSsid, entIdentity, entUser, entPass;
   String entCa;        // optional CA certificate (PEM) to verify the RADIUS server

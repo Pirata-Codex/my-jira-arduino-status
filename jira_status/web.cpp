@@ -45,13 +45,13 @@ static void handleRoot() {
 
   String h;
   h.reserve(6000);
-  h += F("<!doctype html><meta name=viewport content='width=device-width'><title>Jira Status</title><style>"
+  h += F("<!doctype html><meta name=viewport content='width=device-width'><title>F.R.I.D.A.Y.</title><style>"
          "body{font:15px system-ui;background:#0f1117;color:#e6e8ef;max-width:640px;margin:auto;padding:16px}"
          "h1{font-size:20px}h2{font-size:15px;color:#6c8cff;margin-top:24px}label{display:block;margin:10px 0}"
          "input{display:block;width:100%;box-sizing:border-box;padding:8px;margin-top:4px;background:#1a1d27;"
          "color:#e6e8ef;border:1px solid #2a2f3d;border-radius:8px}small{color:#8a90a2}"
          "button{background:#6c8cff;color:#fff;border:0;padding:10px 18px;border-radius:8px;margin-top:16px}"
-         ".err{color:#ff4d5e}a{color:#6c8cff}</style><h1>Jira Status board</h1>");
+         ".err{color:#ff4d5e}a{color:#6c8cff}</style><h1>F.R.I.D.A.Y. · Jira status board</h1>");
   h += "<p><small>Free memory " + String(ESP.getFreeHeap() / 1024) + " KB, largest block " +
        String(ESP.getMaxAllocHeap() / 1024) + " KB (HTTPS needs about 40 KB)</small></p>";
   if (mock) h += F("<p class=err>Demo data: set the Jira URL and token to go live.</p>");
@@ -89,6 +89,7 @@ static void handleRoot() {
   h += field("rotate", "Seconds per screen", String(gCfg.rotateSec), "", "number");
   h += field("refresh", "Refresh Jira + calendar every (minutes)", String(gCfg.refreshMin), "The dashboard pauses for a few seconds while it refreshes", "number");
   h += field("kumaMin", "Refresh Kuma health every (minutes)", String(gCfg.kumaMin), "", "number");
+  h += field("owner", "Your name", gCfg.ownerName, "F.R.I.D.A.Y. greets you with it");
   h += F("<h2>Cards slide</h2>");
   h += field("cardsPP", "Cards per page (1-5)", String(gCfg.cardsPerPage), "", "number");
   h += field("cardSec", "Seconds per page", String(gCfg.cardPageSec), "", "number");
@@ -121,6 +122,8 @@ static void handleSave() {
   gCfg.cardsPerPage = constrain(arg("cardsPP").toInt(), 1, 5);
   gCfg.cardPageSec = constrain(arg("cardSec").toInt(), 2, 60);
   gCfg.hideDone = server.hasArg("hideDone");
+  gCfg.ownerName = arg("owner");
+  if (gCfg.ownerName.isEmpty()) gCfg.ownerName = "Boss";
   if (arg("webPass").length()) gCfg.webPass = arg("webPass");
   String oldEnt = gCfg.entSsid + "|" + gCfg.entUser + "|" + gCfg.entIdentity + "|" + gCfg.entPass + "|" + gCfg.entCa;
   gCfg.entSsid = arg("entSsid");

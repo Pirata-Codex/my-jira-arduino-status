@@ -29,6 +29,7 @@ void settings_load() {
   gCfg.cardsPerPage = prefs.getUChar("cardsPP", 5);
   gCfg.cardPageSec = prefs.getUChar("cardSec", 5);
   gCfg.hideDone = prefs.getBool("hideDone", false);
+  gCfg.ownerName = prefs.getString("owner", "Boss");
   gCfg.entSsid = prefs.getString("entSsid", "");
   gCfg.entIdentity = prefs.getString("entId", "");
   gCfg.entUser = prefs.getString("entUser", "");
@@ -59,6 +60,7 @@ void settings_save() {
   prefs.putUChar("cardsPP", gCfg.cardsPerPage);
   prefs.putUChar("cardSec", gCfg.cardPageSec);
   prefs.putBool("hideDone", gCfg.hideDone);
+  prefs.putString("owner", gCfg.ownerName);
   prefs.putString("entSsid", gCfg.entSsid);
   prefs.putString("entId", gCfg.entIdentity);
   prefs.putString("entUser", gCfg.entUser);

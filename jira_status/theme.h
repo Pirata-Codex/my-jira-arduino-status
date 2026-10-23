@@ -1,26 +1,35 @@
 #pragma once
 #include <lvgl.h>
 
-// Dark "focus" palette.
-#define C_BG      lv_color_hex(0x0F1117)
-#define C_CARD    lv_color_hex(0x1A1D27)
-#define C_BORDER  lv_color_hex(0x2A2F3D)
-#define C_TEXT    lv_color_hex(0xE6E8EF)
-#define C_MUTED   lv_color_hex(0x8A90A2)
-#define C_ACCENT  lv_color_hex(0x6C8CFF)
-#define C_GREEN   lv_color_hex(0x2ECC71)
+// F.R.I.D.A.Y. HUD palette: near-black blue, cyan lines, lime for progress, amber/red for attention.
+#define C_BG      lv_color_hex(0x060D16)
+#define C_LINE    lv_color_hex(0x1C6A80)   // panel outlines
+#define C_DIM     lv_color_hex(0x0E2230)   // tracks, empty bars
+#define C_CYAN    lv_color_hex(0x22D3EE)
+#define C_ICE     lv_color_hex(0x8FD8E8)
+#define C_TEXT    lv_color_hex(0xECEEF4)
+#define C_MUTED   lv_color_hex(0x5E8796)
+#define C_LIME    lv_color_hex(0xA3E635)
+#define C_VIOLET  lv_color_hex(0xA78BFA)
 #define C_AMBER   lv_color_hex(0xF5A623)
 #define C_RED     lv_color_hex(0xFF4D5E)
-#define C_PURPLE  lv_color_hex(0xA78BFA)
 
 // Vazirmatn (Latin + Persian) with Montserrat as fallback for the LV_SYMBOL_* icons.
 // Regenerate with extras/make_fonts.sh.
 LV_FONT_DECLARE(vazir_14);
 LV_FONT_DECLARE(vazir_16);
 LV_FONT_DECLARE(vazir_20);
+// Share Tech Mono (HUD lettering). hud_12/16/22 fall back to Vazirmatn for Persian, then Montserrat
+// for icons; hud_48 holds only digits and ": % + - . /" for the clock and big numbers.
+LV_FONT_DECLARE(hud_12);
+LV_FONT_DECLARE(hud_16);
+LV_FONT_DECLARE(hud_22);
+LV_FONT_DECLARE(hud_48);
 
 #define F_SMALL   (&vazir_14)
 #define F_BODY    (&vazir_16)
 #define F_TITLE   (&vazir_20)
-#define F_BIG     (&lv_font_montserrat_28)
-#define F_HUGE    (&lv_font_montserrat_48)
+#define F_HUD     (&hud_12)
+#define F_HUD_M   (&hud_16)
+#define F_HUD_L   (&hud_22)
+#define F_CLOCK   (&hud_48)

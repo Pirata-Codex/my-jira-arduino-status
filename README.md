@@ -22,6 +22,19 @@ A banner appears over every screen:
 - **Red, pulsing:** a meeting has started. It stays for the first 2 minutes.
 - **Red, pulsing:** a Kuma monitor is down. It stays until the monitor is back up.
 
+## Look: F.R.I.D.A.Y. HUD
+
+Iron Man style heads-up display: chamfered cyan outline panels with corner brackets, Share Tech Mono lettering
+(Persian falls back to Vazirmatn), a spinning arc reactor next to **F.R.I.D.A.Y.** in the header with a status line
+("GOOD MORNING, BOSS", "ALL SYSTEMS NOMINAL", "1 SERVICE(S) DOWN, BOSS"), and a PULSE / SPRINT / CARDS / KPI / HEALTH
+bar at the bottom. Only small areas animate, so it stays smooth on the ILI9488.
+
+- **Alerts:** meeting soon (amber, countdown), meeting live (red pulse, time since start), service down (red pulse,
+  down/total). Several at once rotate every 4 s with a "1/2" counter.
+- **Meeting place:** a room code like `3M2` in the location, title or description is shown as the place; otherwise a
+  Google Meet or Skyroom link; otherwise the location text.
+- **Your name** (settings page) is how F.R.I.D.A.Y. greets you.
+
 ## Hardware
 
 - An ESP32 dev board (ESP32-WROOM-32, 4 MB flash). No PSRAM is needed.
