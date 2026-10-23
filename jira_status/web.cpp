@@ -52,6 +52,8 @@ static void handleRoot() {
          "color:#e6e8ef;border:1px solid #2a2f3d;border-radius:8px}small{color:#8a90a2}"
          "button{background:#6c8cff;color:#fff;border:0;padding:10px 18px;border-radius:8px;margin-top:16px}"
          ".err{color:#ff4d5e}a{color:#6c8cff}</style><h1>Jira Status board</h1>");
+  h += "<p><small>Free memory " + String(ESP.getFreeHeap() / 1024) + " KB, largest block " +
+       String(ESP.getMaxAllocHeap() / 1024) + " KB (HTTPS needs about 40 KB)</small></p>";
   if (mock) h += F("<p class=err>Demo data: set the Jira URL and token to go live.</p>");
   if (sprintErr.length()) h += "<p class=err>Jira: " + esc(sprintErr) + "</p>";
   if (healthErr.length()) h += "<p class=err>Kuma: " + esc(healthErr) + "</p>";

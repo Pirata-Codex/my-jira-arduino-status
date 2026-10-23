@@ -399,5 +399,5 @@ static void task(void*) {
 
 void fetch_begin() {
   // TLS needs a deep stack. Core 0 keeps network work away from the UI loop on core 1.
-  xTaskCreatePinnedToCore(task, "fetch", 20 * 1024, nullptr, 1, nullptr, 0);
+  xTaskCreatePinnedToCore(task, "fetch", 16 * 1024, nullptr, 1, nullptr, 0);
 }

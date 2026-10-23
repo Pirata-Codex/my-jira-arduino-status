@@ -11,6 +11,8 @@
 #define LV_USE_STDLIB_STRING LV_STDLIB_CLIB
 #define LV_USE_STDLIB_SPRINTF LV_STDLIB_CLIB
 #define LV_DEF_REFR_PERIOD 20
+/* Small layer buffer: leaves heap for the HTTPS (TLS) handshake. */
+#define LV_DRAW_LAYER_SIMPLE_BUF_SIZE (4 * 1024)
 
 /* Display driver: LVGL's built-in TFT_eSPI glue (pins/panel come from TFT_eSPI's User_Setup.h). */
 #define LV_USE_TFT_ESPI 1

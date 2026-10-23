@@ -65,6 +65,14 @@ static lv_obj_t* caption(lv_obj_t* parent, const char* s) {
   return l;
 }
 
+// Long messages (fetch errors) wrap instead of being cut off.
+static lv_obj_t* errorText(lv_obj_t* parent, const char* s) {
+  lv_obj_t* l = text(parent, F_BODY, C_MUTED, s);
+  lv_obj_set_width(l, 440);
+  lv_label_set_long_mode(l, LV_LABEL_LONG_WRAP);
+  return l;
+}
+
 static lv_obj_t* newScreen() {
   lv_obj_t* s = lv_obj_create(nullptr);
   lv_obj_set_style_bg_color(s, C_BG, 0);
@@ -158,6 +166,8 @@ static void buildNow() {
   nowDate = text(s, F_BODY, C_MUTED, "");
   lv_obj_set_pos(nowDate, 20, 112);
   nowMini = text(s, F_SMALL, C_ACCENT, "");
+  lv_obj_set_width(nowMini, 206);
+  lv_label_set_long_mode(nowMini, LV_LABEL_LONG_WRAP);
   lv_obj_set_pos(nowMini, 20, 140);
 
   lv_obj_t* m = box(s, 236, 46, 230, 120);
@@ -433,7 +443,7 @@ static void renderCards() {
       shown++;
     }
   }
-  if (!s.count) text(cardList, F_TITLE, C_MUTED, s.ok ? "No cards in this sprint" : s.err.c_str());
+  if (!s.count) errorText(cardList, s.ok ? "No cards in this sprint" : ("Jira: " + s.err).c_str());
   lv_label_set_text(cardMore, s.count > shown ? ("+" + String(s.count - shown) + " more").c_str() : "");
 }
 
@@ -470,7 +480,7 @@ static void renderHealth() {
   lv_obj_clean(hlGrid);
   const HealthData& h = snap.health;
   if (!h.ok && !h.count) {
-    text(hlGrid, F_TITLE, C_MUTED, h.err.length() ? ("Kuma: " + h.err).c_str() : "Loading...");
+    errorText(hlGrid, h.err.length() ? ("Kuma: " + h.err).c_str() : "Loading...");
     lv_label_set_text(hlSummary, "");
     return;
   }
@@ -487,8 +497,6 @@ static void renderHealth() {
     lv_obj_set_style_radius(dot, 6, 0);
     lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(dot, m.up ? C_GREEN : C_RED, 0);
-    lv_obj_set_style_shadow_width(dot, 10, 0);
-    lv_obj_set_style_shadow_color(dot, m.up ? C_GREEN : C_RED, 0);
     lv_obj_align(dot, LV_ALIGN_LEFT_MID, 0, 0);
     lv_obj_t* name = text(t, F_BODY, C_TEXT, m.name.c_str());
     lv_obj_set_width(name, 180);

@@ -16,8 +16,8 @@
 #error "LVGL is using another lv_conf.h. Copy extras/lv_conf.h over Documents/Arduino/libraries/lv_conf.h"
 #endif
 
-// 1/10 of the screen, allocated at runtime (a static buffer doesn't fit the DRAM segment).
-static const size_t DRAW_BUF_BYTES = TFT_HOR_RES * TFT_VER_RES / 10 * 2;
+// 1/20 of the screen, allocated at runtime (a static buffer doesn't fit the DRAM segment).
+static const size_t DRAW_BUF_BYTES = TFT_HOR_RES * TFT_VER_RES / 20 * 2;
 
 static uint32_t tick() { return millis(); }
 
