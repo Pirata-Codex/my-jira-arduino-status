@@ -665,8 +665,9 @@ static void renderHealth() {
     lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, 0);
     lv_obj_set_style_bg_color(dot, m.up ? C_GREEN : C_RED, 0);
     lv_obj_align(dot, LV_ALIGN_LEFT_MID, 0, 0);
-    lv_obj_t* name = text(t, F_BODY, C_TEXT, m.name.c_str());
-    lv_obj_set_width(name, 180);
+    // Long monitor names (e.g. "CRM-CheckedCache-LoginTest") use the small font so they fit the tile.
+    lv_obj_t* name = text(t, m.name.length() > 20 ? F_SMALL : F_BODY, C_TEXT, m.name.c_str());
+    lv_obj_set_width(name, 192);
     lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
     lv_obj_align(name, LV_ALIGN_TOP_LEFT, 22, 0);
     String sub = m.up ? (m.ping >= 0 ? String(m.ping) + " ms" : String("up")) : String("DOWN");
