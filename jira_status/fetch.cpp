@@ -6,7 +6,6 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
-#include <Preferences.h>
 #include <algorithm>
 
 static volatile bool refreshNow = true;
@@ -139,38 +138,6 @@ static int jiraCount(const String& jql, String& err) {
   return doc["total"] | -1;
 }
 
-// Keeps the last BURN_DAYS "points remaining" values in NVS, one per day, reset when the sprint changes.
-static void updateBurndown(SprintData& s) {
-  struct tm lt;
-  time_t now = time(nullptr);
-  localtime_r(&now, &lt);
-  uint32_t today = (lt.tm_year + 1900) * 10000 + (lt.tm_mon + 1) * 100 + lt.tm_mday;
-  Preferences p;
-  p.begin("burn", false);
-  String sprint = p.getString("sprint", "");
-  uint32_t last = p.getUInt("day", 0);
-  float vals[BURN_DAYS] = {};
-  int len = 0;
-  if (sprint == s.name) {
-    len = min((int)p.getUChar("len", 0), BURN_DAYS);
-    p.getBytes("vals", vals, sizeof(vals));
-  }
-  float remaining = s.ptsTotal - s.ptsDone;
-  if (len > 0 && last == today) {
-    vals[len - 1] = remaining;
-  } else {
-    if (len == BURN_DAYS) { memmove(vals, vals + 1, sizeof(float) * (BURN_DAYS - 1)); len--; }
-    vals[len++] = remaining;
-  }
-  p.putString("sprint", s.name);
-  p.putUInt("day", today);
-  p.putUChar("len", len);
-  p.putBytes("vals", vals, sizeof(vals));
-  p.end();
-  memcpy(s.burn, vals, sizeof(vals));
-  s.burnLen = len;
-}
-
 static void fetchJira(SprintData& s) {
   s = SprintData();
   String base = trimSlash(gCfg.jiraUrl);
@@ -180,10 +147,11 @@ static void fetchJira(SprintData& s) {
   f["fields"]["summary"] = true;
   f["fields"]["status"]["name"] = true;
   f["fields"]["status"]["statusCategory"]["key"] = true;
+  f["fields"]["resolutiondate"] = true;
   if (gCfg.spField.length()) f["fields"][gCfg.spField] = true;
   filter["total"] = true;
 
-  String fields = "summary,status";
+  String fields = "summary,status,resolutiondate";
   if (gCfg.spField.length()) fields += "," + gCfg.spField;
   String url = base + "/rest/api/2/search?maxResults=" + String(MAX_CARDS) + "&fields=" + fields + "&jql=" + urlEncode(gCfg.jql);
   JsonDocument doc;
@@ -196,6 +164,7 @@ static void fetchJira(SprintData& s) {
     c.title = issue["fields"]["summary"].as<const char*>();
     c.status = issue["fields"]["status"]["name"].as<const char*>();
     c.cat = categorize(c.status, issue["fields"]["status"]["statusCategory"]["key"], c.blocked);
+    c.resolved = c.cat == CAT_DONE ? parseIso(issue["fields"]["resolutiondate"]) : 0;
     // Without a story-points field every card counts as one point.
     c.pts = gCfg.spField.length() ? (issue["fields"][gCfg.spField] | 0.0f) : 1.0f;
     s.ptsTotal += c.pts;
@@ -208,6 +177,7 @@ static void fetchJira(SprintData& s) {
     if (getJson(base + "/rest/agile/1.0/board/" + gCfg.boardId + "/sprint?state=active", gCfg.jiraPat, sp, nullptr, err)) {
       JsonObject v = sp["values"][0];
       s.name = v["name"] | "";
+      s.startTs = parseIso(v["startDate"]);
       s.endTs = parseIso(v["endDate"]);
     }
   }
@@ -218,7 +188,6 @@ static void fetchJira(SprintData& s) {
   s.kpi2 = jiraCount(gCfg.kpi2Jql, err);
   s.ok = true;
   s.updated = time(nullptr);
-  updateBurndown(s);
 }
 
 // ---------- Uptime Kuma (public status page API, no auth) ----------

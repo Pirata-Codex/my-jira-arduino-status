@@ -9,10 +9,11 @@ void model_init() { mtx = xSemaphoreCreateMutex(); }
 void model_lock() { xSemaphoreTake(mtx, portMAX_DELAY); }
 void model_unlock() { xSemaphoreGive(mtx); }
 
-static void card(SprintData& s, const char* key, const char* title, const char* status, CardCat cat, float pts, bool blocked = false) {
+static void card(SprintData& s, const char* key, const char* title, const char* status, CardCat cat, float pts, bool blocked = false, int doneDaysAgo = 0) {
   if (s.count >= MAX_CARDS) return;
   Card& c = s.cards[s.count++];
   c.key = key; c.title = title; c.status = status; c.cat = cat; c.pts = pts; c.blocked = blocked;
+  if (cat == CAT_DONE) c.resolved = time(nullptr) - doneDaysAgo * 86400L;
   s.ptsTotal += pts;
   if (cat == CAT_DONE) s.ptsDone += pts;
 }
@@ -24,19 +25,21 @@ void model_fill_mock(Snapshot& d) {
   s = SprintData();
   s.ok = true;
   s.name = "CRM Sprint 42";
+  s.startTs = now - 9 * 86400;
   s.endTs = now + 4 * 86400;
   card(s, "CRM-854", "Sync medrep visits to BP", "In Progress", CAT_PROGRESS, 5);
   card(s, "CRM-861", "Contact birthdate cleanup", "In Review", CAT_REVIEW, 3);
   card(s, "CRM-870", "SMS campaign report", "To Do", CAT_TODO, 8);
   card(s, "CRM-872", "Plan lock Hangfire job", "Blocked", CAT_TODO, 3, true);
-  card(s, "CRM-840", "Department % fix", "Done", CAT_DONE, 5);
-  card(s, "CRM-843", "Visit history export", "Done", CAT_DONE, 8);
-  card(s, "CRM-848", "AD group mapping", "Done", CAT_DONE, 2);
+  card(s, "CRM-840", "Department % fix", "Done", CAT_DONE, 5, false, 7);
+  card(s, "CRM-843", "اصلاح گزارش ویزیت‌ها", "Done", CAT_DONE, 8, false, 4);
+  card(s, "CRM-848", "AD group mapping", "Done", CAT_DONE, 2, false, 1);
+  card(s, "UBP-710", "قفل برنامه‌ها بعد از پایان ماه", "In Progress", CAT_PROGRESS, 5);
+  card(s, "UBP-692", "Hangfire retry policy", "To Do", CAT_TODO, 1);
+  card(s, "CRM-3229", "خروجی اکسل پیامک‌ها", "To Do", CAT_TODO, 2);
+  card(s, "CRM-3230", "Fix contact merge rule", "Done", CAT_DONE, 0.5, false, 2);
   s.kpi1 = 3;
   s.kpi2 = 1;
-  float burn[] = {34, 34, 31, 29, 26, 21, 19, 19};
-  s.burnLen = sizeof(burn) / sizeof(burn[0]);
-  memcpy(s.burn, burn, sizeof(burn));
   s.updated = now;
 
   HealthData& h = d.health;

@@ -4,29 +4,27 @@
 
 enum CardCat : uint8_t { CAT_TODO, CAT_PROGRESS, CAT_REVIEW, CAT_DONE };
 
-constexpr int MAX_CARDS = 20;
+constexpr int MAX_CARDS = 40;
 constexpr int MAX_MONITORS = 12;
 constexpr int MAX_MEETINGS = 10;
-constexpr int BURN_DAYS = 14;
 
 struct Card {
   String key, title, status;
   CardCat cat = CAT_TODO;
   float pts = 0;
   bool blocked = false;
+  time_t resolved = 0;        // done cards: when they were resolved (burndown)
 };
 
 struct SprintData {
   bool ok = false;
   String err;
   String name;
-  time_t endTs = 0;           // 0 when no board id is configured
+  time_t startTs = 0, endTs = 0;  // 0 when no board id is configured
   float ptsDone = 0, ptsTotal = 0;
   int count = 0;
   Card cards[MAX_CARDS];
   int kpi1 = -1, kpi2 = -1;   // custom JQL counts, -1 = not configured / failed
-  float burn[BURN_DAYS] = {};  // points remaining, one per day
-  int burnLen = 0;
   time_t updated = 0;
 };
 

@@ -10,9 +10,9 @@ The screens rotate every few seconds. You can change the timing on the settings 
 
 | Screen | Shows |
 |---|---|
-| **Now** | A big clock and the date. The next meeting with a countdown. The card you're working on. |
-| **Sprint** | A points-done gauge, days left, a card count per status, and a burndown line. The board records one point per day. |
-| **My cards** | Your sprint cards, active ones first, each with a colored status pill and story points. |
+| **Now** | A big clock, the Gregorian and Persian (Jalali) date, the next meeting with a countdown, and the card you are working on. |
+| **Sprint** | A points-done gauge, days left, a card count per status, and a burndown chart built from Jira resolution dates (blue = actual, grey = ideal). |
+| **My cards** | All sprint cards (up to 40), tinted by status with a legend, scrolling slowly like film credits. |
 | **KPIs** | Points done, sprint scope %, WIP, blocked cards, plus two KPI tiles you define with JQL. By default these are open ITSM tickets you raised and your overdue cards. |
 | **Health** | One tile per Uptime Kuma monitor, with up/down, ping and 24h uptime. |
 
