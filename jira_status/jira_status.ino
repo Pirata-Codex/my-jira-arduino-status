@@ -16,8 +16,9 @@
 #error "LVGL is using another lv_conf.h. Copy extras/lv_conf.h over Documents/Arduino/libraries/lv_conf.h"
 #endif
 
-// 1/20 of the screen, allocated at runtime (a static buffer doesn't fit the DRAM segment).
-static const size_t DRAW_BUF_BYTES = TFT_HOR_RES * TFT_VER_RES / 20 * 2;
+// 1/10 of the screen, allocated at runtime (a static buffer doesn't fit the DRAM segment).
+// Fewer, larger SPI pushes; RAM allows it since the dashboard is freed during HTTPS refreshes.
+static const size_t DRAW_BUF_BYTES = TFT_HOR_RES * TFT_VER_RES / 10 * 2;
 
 // HTTPS (TLS handshake + JSON) runs in loop() now; the default 8 KB loop stack overflowed.
 SET_LOOP_TASK_STACK_SIZE(20 * 1024);

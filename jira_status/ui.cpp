@@ -768,10 +768,11 @@ static void updateBanner(time_t now) {
 
 // ---------- loop ----------
 
+// The ILI9488 over SPI does ~10 full frames/s, so the slide is short: a quick swipe, not a slow judder.
 static void showPage(int p, bool animate) {
   LOG("page %s", PAGE_TITLES[p]);
   page = p;
-  lv_screen_load_anim(screens[p], animate ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_NONE, animate ? 350 : 0, 0, false);
+  lv_screen_load_anim(screens[p], animate ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_NONE, animate ? 250 : 0, 0, false);
   lv_label_set_text(topTitle, PAGE_TITLES[p]);
   for (int i = 0; i < PG_COUNT; i++) {
     lv_obj_set_style_bg_color(dots[i], i == p ? C_ACCENT : C_BORDER, 0);
