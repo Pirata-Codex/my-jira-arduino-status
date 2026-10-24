@@ -712,30 +712,41 @@ static void renderAgenda(time_t now) {
   if (!d.configured) { errorText(agList, 6, 6, "CALENDAR NOT SET · ADD AN .ICS URL ON THE SETTINGS PAGE"); return; }
   if (!d.ok) { errorText(agList, 6, 6, ("CALENDAR: " + d.err).c_str()); return; }
   if (!d.count) { errorText(agList, 6, 6, "NO MEETINGS TODAY"); return; }
+  // Only meetings that haven't ended: up to 4, taller rows when there are fewer so long
+  // links and locations get a second line.
   int first = 0;
   while (first < d.count && d.m[first].end <= now) first++;
-  first = max(0, min(first - 1, d.count - 5));
+  int n = min(d.count - first, 4);
+  if (!n) { errorText(agList, 6, 6, "NO MORE MEETINGS TODAY"); return; }
+  int step = min(74, 224 / n);
+  bool twoLines = step >= 60;
   const Meeting* next = nextMeeting(now);
-  for (int i = first, row = 0; i < d.count && row < 5; i++, row++) {
-    const Meeting& m = d.m[i];
-    bool past = m.end <= now, live = m.start <= now && now < m.end;
-    lv_color_t col = past ? C_MUTED : live ? C_RED : &m == next ? C_AMBER : C_ICE;
-    lv_obj_t* r = panel(agList, 0, row * 45, 468, 42, 6, live ? C_RED : C_LINE);
-    rect(r, 8, 10, 3, 22, col);
-    lv_obj_set_pos(hudText(r, F_HUD_M, past ? C_MUTED : C_TEXT, hhmm(m.start).c_str()), 18, 2);
+  for (int row = 0; row < n; row++) {
+    const Meeting& m = d.m[first + row];
+    bool past = false, live = m.start <= now;
+    lv_color_t col = live ? C_RED : &m == next ? C_AMBER : C_ICE;
+    int h = step - 4;
+    lv_obj_t* r = panel(agList, 0, row * step, 468, h, 6, live ? C_RED : C_LINE);
+    rect(r, 8, 8, 3, h - 16, col);
+    lv_obj_set_pos(hudText(r, F_HUD_M, C_TEXT, hhmm(m.start).c_str()), 18, 2);
     lv_obj_set_pos(hudText(r, F_HUD, C_MUTED, hhmm(m.end).c_str()), 18, 21);
-    lv_obj_t* title = text(r, F_SMALL, past ? C_MUTED : C_TEXT, m.title.c_str());
-    lv_obj_set_width(title, 268);
+    lv_obj_t* title = text(r, F_SMALL, C_TEXT, m.title.c_str());
+    lv_obj_set_width(title, 280);
     lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
     lv_obj_set_pos(title, 80, 1);
     lv_obj_t* where = hudText(r, F_HUD, C_CYAN, m.where.length() ? m.where.c_str() : "-");
-    lv_obj_set_width(where, 268);
-    lv_label_set_long_mode(where, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(where, 280);
+    if (twoLines) {
+      lv_label_set_long_mode(where, LV_LABEL_LONG_WRAP);  // links wrap onto a second line
+      lv_obj_set_height(where, 36);
+    } else {
+      lv_label_set_long_mode(where, LV_LABEL_LONG_DOT);
+    }
     lv_obj_set_pos(where, 80, 22);
     long mins = (m.start - now) / 60;
     String state = past ? String("DONE") : live ? String("LIVE")
                  : mins >= 60 ? "IN " + String(mins / 60) + "H" : "IN " + String(max(1L, mins)) + "M";
-    lv_obj_t* pill = plain(r, 468 - 96, 11, 84, 20);
+    lv_obj_t* pill = plain(r, 468 - 96, (h - 20) / 2 - 2, 84, 20);
     lv_obj_set_style_radius(pill, 10, 0);
     lv_obj_set_style_border_width(pill, 1, 0);
     lv_obj_set_style_border_color(pill, col, 0);
