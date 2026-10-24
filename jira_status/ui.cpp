@@ -481,7 +481,6 @@ static void buildNow() {
   lv_obj_set_width(nowSprint, 120);
   lv_label_set_long_mode(nowSprint, LV_LABEL_LONG_DOT);
   lv_obj_set_pos(nowSprint, 10, 6);
-  lv_obj_set_pos(hudText(R, F_HUD, C_MUTED, "SPRINT PROGRESS"), 10, 26);
   lv_color_t legColors[4] = {C_LIME, C_VIOLET, C_CYAN, C_ICE};
   for (int i = 0; i < 4; i++) {
     rect(R, 10, 50 + i * 14, 6, 6, legColors[i]);
@@ -696,19 +695,21 @@ static const Meeting* nextMeeting(time_t now) {
 
 // Minute-level parts of the home screen: next meeting line and the "now" marker.
 static void renderNowTime(time_t now) {
-  const Meeting* m = nextMeeting(now);
-  if (m) {
-    long mins = (m->start - now) / 60;
-    String when = m->start > now ? (mins >= 60 ? "IN " + String(mins / 60) + "H " + String(mins % 60) + "M" : "IN " + String(mins) + "M") : String("NOW");
-    String line = m->title + "  " + hhmm(m->start) + " · " + when + (m->where.length() ? " · " + m->where : "");
-    lv_label_set_text(nowMeet, line.c_str());
-    lv_obj_set_style_text_color(nowMeet, m->start - now <= MEETING_SOON_SEC ? C_AMBER : C_ICE, 0);
-  } else if (snap.meet.configured && !snap.meet.ok) {
-    lv_label_set_text(nowMeet, ("CALENDAR: " + snap.meet.err).c_str());
+  // Just the count here; the details are on the AGENDA tab.
+  const MeetingData& d = snap.meet;
+  if (d.configured && !d.ok) {
+    lv_label_set_text(nowMeet, ("CALENDAR: " + d.err).c_str());
     lv_obj_set_style_text_color(nowMeet, C_RED, 0);
-  } else {
-    lv_label_set_text(nowMeet, snap.meet.configured ? "NO MORE MEETINGS TODAY" : "CALENDAR NOT SET");
+  } else if (!d.configured) {
+    lv_label_set_text(nowMeet, "CALENDAR NOT SET");
     lv_obj_set_style_text_color(nowMeet, C_MUTED, 0);
+  } else {
+    int left = 0;
+    for (int i = 0; i < d.count; i++) if (d.m[i].end > now) left++;
+    String line = d.count ? String(d.count) + (d.count == 1 ? " MEETING TODAY" : " MEETINGS TODAY") : String("NO MEETINGS TODAY");
+    if (d.count && left < d.count) line += left ? " · " + String(left) + " LEFT" : String(" · ALL DONE");
+    lv_label_set_text(nowMeet, line.c_str());
+    lv_obj_set_style_text_color(nowMeet, left ? C_ICE : C_MUTED, 0);
   }
   lv_obj_set_x(nowTlNow, TL_X + tlX(now) - 1);
 }
