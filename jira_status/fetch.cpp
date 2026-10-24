@@ -536,21 +536,39 @@ static bool getJson(const String& url, const String& bearer, JsonDocument& doc, 
   return getJsonUnlocked(url, bearer, doc, filter, err);
 }
 
-static void fetchCalendarUnlocked(MeetingData& d);
+static void fetchCalendarUnlocked(MeetingData& d, const String& url0);
 
-// The mail server fails intermittently (403 / server error, fine on the next try), so retry a few times.
+// The same link with the host swapped for the mail server's address inside the company, over plain
+// http. From outside the mail server's public address answers the ESP32 with 403; inside the company
+// network the internal server serves the same file to any client.
+static String lanIcsUrl() {
+  if (!strlen(ICS_LAN_HOST)) return "";
+  const String& u = gCfg.icsUrl;
+  int hs = u.indexOf("://");
+  if (hs < 0) return "";
+  int ps = u.indexOf('/', hs + 3);
+  return ps < 0 ? "" : String("http://") + ICS_LAN_HOST + u.substring(ps);
+}
+
+// Tries the configured link, then the internal server, alternating, up to 4 attempts in all
+// (the public server also fails intermittently).
 static void fetchCalendar(MeetingData& d) {
+  String lan = lanIcsUrl();
   for (int attempt = 1; attempt <= 4; attempt++) {
-    fetchCalendarUnlocked(d);
-    if (d.ok || !d.configured) return;
+    bool useLan = lan.length() && attempt % 2 == 0;
+    fetchCalendarUnlocked(d, useLan ? lan : gCfg.icsUrl);
+    if (d.ok || !d.configured) {
+      if (d.ok) LOG("calendar: ok via %s", useLan ? "internal server" : "configured link");
+      return;
+    }
     if (attempt < 4) {
       LOG("calendar: %s, retry %d/3", d.err.c_str(), attempt);
-      delay(1500 * attempt);
+      delay(1000 * attempt);
     }
   }
 }
 
-static void fetchCalendarUnlocked(MeetingData& d) {
+static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
   d = MeetingData();
   if (gCfg.icsUrl.isEmpty()) return;
   d.configured = true;
@@ -571,7 +589,7 @@ static void fetchCalendarUnlocked(MeetingData& d) {
   // TLS clients without it, so announce plain HTTP/1.1 like curl --http1.1 does.
   static const char* alpn[] = {"http/1.1", nullptr};
   tls.setAlpnProtocols(alpn);
-  String url = gCfg.icsUrl;
+  String url = url0;
   Client* net = nullptr;
   ChunkedStream body(tls);
   int code = 0;

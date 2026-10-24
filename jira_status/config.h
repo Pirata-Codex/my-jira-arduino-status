@@ -18,6 +18,9 @@
 #define NTP_1 "OP-DC02-SRV.orchidpharmed.com"
 #define NTP_2 "ntp.time.ir"
 #define NTP_3 "time.google.com"
+// Mail server address inside the company network. When the calendar link fails, the board tries
+// the same path on this host over plain http ("" turns this off).
+#define ICS_LAN_HOST "10.20.36.36"
 
 #define FETCH_JIRA_MS     (2 * 60 * 1000UL)
 #define FETCH_KUMA_MS     (60 * 1000UL)
