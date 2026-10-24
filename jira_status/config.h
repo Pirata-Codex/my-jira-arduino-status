@@ -1,5 +1,7 @@
 #pragma once
 
+#define FRIDAY_VERSION "1.0.0"
+
 // Panel is 320x480 portrait natively; LVGL rotates it to 480x320 landscape.
 #define TFT_HOR_RES 320
 #define TFT_VER_RES 480

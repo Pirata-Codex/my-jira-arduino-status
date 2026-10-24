@@ -138,6 +138,7 @@ void setup() {
   settings_load();
   model_init();
 
+  LOG("F.R.I.D.A.Y. %s", FRIDAY_VERSION);
   lv_init();
   lv_tick_set_cb(tick);
   lv_log_register_print_cb(lvLog);

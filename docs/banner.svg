@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 260" width="960" height="260" font-family="'Share Tech Mono','Consolas','Courier New',monospace">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#03141a"/>
+      <stop offset="1" stop-color="#061f27"/>
+    </linearGradient>
+    <pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M24 0H0V24" fill="none" stroke="#0e3a44" stroke-width="1"/>
+    </pattern>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <linearGradient id="scan" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2fd6f0" stop-opacity="0"/>
+      <stop offset="1" stop-color="#2fd6f0" stop-opacity=".18"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="960" height="260" fill="url(#bg)"/>
+  <rect width="960" height="260" fill="url(#grid)" opacity=".55"/>
+  <rect x="0" y="-40" width="960" height="40" fill="url(#scan)">
+    <animate attributeName="y" from="-40" to="260" dur="4s" repeatCount="indefinite"/>
+  </rect>
+
+  <!-- chamfered frame with corner brackets -->
+  <path d="M28 16H900L944 60V244H60L16 200V28Z" fill="none" stroke="#2fd6f0" stroke-width="1.5" opacity=".7"/>
+  <path d="M16 60V28L28 16H70" fill="none" stroke="#2fd6f0" stroke-width="4" filter="url(#glow)"/>
+  <path d="M944 200V244H890" fill="none" stroke="#2fd6f0" stroke-width="4" filter="url(#glow)"/>
+
+  <!-- arc reactor -->
+  <g transform="translate(140 130)" filter="url(#glow)">
+    <circle r="78" fill="none" stroke="#0e3a44" stroke-width="10"/>
+    <circle r="78" fill="none" stroke="#2fd6f0" stroke-width="3" stroke-dasharray="60 22">
+      <animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="12s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="60" fill="none" stroke="#a6e22e" stroke-width="6" stroke-dasharray="300 77" stroke-linecap="round" transform="rotate(-90)"/>
+    <circle r="44" fill="none" stroke="#2fd6f0" stroke-width="2" stroke-dasharray="6 8">
+      <animateTransform attributeName="transform" type="rotate" from="360" to="0" dur="8s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="22" fill="#2fd6f0" opacity=".9">
+      <animate attributeName="opacity" values=".55;1;.55" dur="2.4s" repeatCount="indefinite"/>
+    </circle>
+    <circle r="10" fill="#e9fbff"/>
+  </g>
+
+  <!-- title -->
+  <text x="268" y="112" font-size="62" letter-spacing="14" fill="#2fd6f0" filter="url(#glow)">F.R.I.D.A.Y.</text>
+  <text x="272" y="148" font-size="17" letter-spacing="5" fill="#7fb6c2">JIRA · CALENDAR · SERVICE HEALTH — ON YOUR DESK</text>
+
+  <!-- status line -->
+  <circle cx="279" cy="190" r="5" fill="#a6e22e">
+    <animate attributeName="opacity" values="1;.25;1" dur="1.6s" repeatCount="indefinite"/>
+  </circle>
+  <text x="294" y="196" font-size="17" letter-spacing="3" fill="#a6e22e">ALL SYSTEMS NOMINAL, BOSS</text>
+  <rect x="772" y="176" width="140" height="30" fill="none" stroke="#2fd6f0" stroke-width="1.5" rx="15"/>
+  <text x="842" y="197" font-size="16" letter-spacing="3" fill="#2fd6f0" text-anchor="middle">v1.0.0</text>
+</svg>
