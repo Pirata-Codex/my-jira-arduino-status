@@ -567,6 +567,10 @@ static void fetchCalendarUnlocked(MeetingData& d) {
   WiFiClientSecure tls;
   WiFiClient plain;
   tls.setInsecure();
+  // curl announces ALPN and the ESP32 does not by default; the mail server's firewall may reject
+  // TLS clients without it, so announce plain HTTP/1.1 like curl --http1.1 does.
+  static const char* alpn[] = {"http/1.1", nullptr};
+  tls.setAlpnProtocols(alpn);
   String url = gCfg.icsUrl;
   Client* net = nullptr;
   ChunkedStream body(tls);
