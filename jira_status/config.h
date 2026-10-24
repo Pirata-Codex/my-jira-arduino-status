@@ -13,9 +13,10 @@
 
 // Iran Standard Time, no DST.
 #define TZ_INFO "<+0330>-3:30"
-// NTP servers, tried in order: time.ir first, then the Iran pool, then Google.
-#define NTP_1 "ntp.time.ir"
-#define NTP_2 "ir.pool.ntp.org"
+// NTP servers, tried in order. The company network blocks outside NTP, so its domain controller
+// comes first (it doesn't resolve elsewhere, so the board falls through to time.ir, then Google).
+#define NTP_1 "OP-DC02-SRV.orchidpharmed.com"
+#define NTP_2 "ntp.time.ir"
 #define NTP_3 "time.google.com"
 
 #define FETCH_JIRA_MS     (2 * 60 * 1000UL)
