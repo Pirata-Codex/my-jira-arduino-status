@@ -385,7 +385,65 @@ static void fetchKuma(HealthData& h) {
   h.updated = time(nullptr);
 }
 
-// ---------- Calendar (.ics, streamed line by line) ----------
+// ---------- Calendar
+
+// "https://host[:port]/path" -> parts.
+static bool splitUrl(const String& url, bool& https, String& host, uint16_t& port, String& path) {
+  https = url.startsWith("https://");
+  if (!https && !url.startsWith("http://")) return false;
+  int hs = https ? 8 : 7;
+  int ps = url.indexOf('/', hs);
+  String hp = ps < 0 ? url.substring(hs) : url.substring(hs, ps);
+  path = ps < 0 ? "/" : url.substring(ps);
+  int c = hp.indexOf(':');
+  host = c < 0 ? hp : hp.substring(0, c);
+  port = c < 0 ? (https ? 443 : 80) : hp.substring(c + 1).toInt();
+  return host.length() > 0;
+}
+
+// Reads an HTTP body, undoing "Transfer-Encoding: chunked" when the server uses it.
+// done() turns true at the end of the body or when the connection closes.
+class ChunkedStream : public Stream {
+ public:
+  explicit ChunkedStream(Stream& s, bool chunked = false) : s_(&s), chunked_(chunked) {}
+  int read() override {
+    if (done_) return -1;
+    if (chunked_ && left_ == 0) {
+      if (started_) s_->readStringUntil('
+');  // CRLF after the previous chunk
+      started_ = true;
+      String size = s_->readStringUntil('
+');
+      size.trim();
+      if (!size.length()) { done_ = true; return -1; }
+      left_ = strtol(size.c_str(), nullptr, 16);
+      if (left_ == 0) { done_ = true; return -1; }
+    }
+    char c;
+    s_->setTimeout(getTimeout());
+    if (s_->readBytes(&c, 1) != 1) { done_ = true; return -1; }
+    if (chunked_) left_--;
+    return (uint8_t)c;
+  }
+  int peek() override { return -1; }
+  int available() override { return done_ ? 0 : 1; }
+  size_t write(uint8_t) override { return 0; }
+  bool done() const { return done_; }
+  // Stream::readStringUntil waits out the whole timeout at the end of the body; this stops at once.
+  String readLine() {
+    String l;
+    for (int c = read(); c >= 0 && c != '
+'; c = read()) l += (char)c;
+    return l;
+  }
+
+ private:
+  Stream* s_;
+  bool chunked_;
+  bool started_ = false;
+  bool done_ = false;
+  long left_ = 0;
+};
 
 static void addMeeting(MeetingData& d, const Meeting& m) {
   if (d.count < MAX_MEETINGS) { d.m[d.count++] = m; return; }
@@ -506,58 +564,113 @@ static void fetchCalendarUnlocked(MeetingData& d) {
   time_t dayStart = localEpoch(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, 0, 0, 0);
   time_t dayEnd = dayStart + 86400;
 
-  HTTPClient http;
+  // The request is written by hand: curl gets 200 from this server where HTTPClient got 403, and
+  // HTTPClient always adds headers of its own (Accept-Encoding, Connection, ...). This sends exactly
+  // what curl sends.
   WiFiClientSecure tls;
   WiFiClient plain;
-  if (!begin(http, tls, plain, gCfg.icsUrl)) { d.err = "bad url"; return; }
-  // From outside the company network the mail server answers 403 to the ESP32's default request
-  // (HTTP/1.0, "ESP32HTTPClient"); present it as an ordinary browser download instead.
-  http.useHTTP10(false);
-  http.setUserAgent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36");
-  http.addHeader("Accept", "text/calendar,text/plain,*/*");
-  http.addHeader("Accept-Language", "en-US,en;q=0.9");
-  int code = timedGet(http);
-  if (code > 0 && code != 200) {
-    // Log what the server says; a 403 page usually names the reason (WAF rule, blocked agent, ...).
-    String body = http.getString();
-    body.replace("\r", "");
-    body.replace("\n", " ");
-    LOG("calendar: HTTP %d, server says: %s", code, body.substring(0, 300).c_str());
+  tls.setInsecure();
+  String url = gCfg.icsUrl;
+  Client* net = nullptr;
+  ChunkedStream body(tls);
+  int code = 0;
+  for (int hop = 0; hop < 3; hop++) {  // follow up to 2 redirects
+    String host, path;
+    uint16_t port;
+    bool https;
+    if (!splitUrl(url, https, host, port, path)) { d.err = "bad url"; return; }
+    net = https ? (Client*)&tls : (Client*)&plain;
+    net->stop();
+    if (!net->connect(host.c_str(), port)) {
+      d.err = "connect failed";
+      if (https) {
+        char tlsErr[100] = "";
+        tls.lastError(tlsErr, sizeof(tlsErr));
+        if (*tlsErr) d.err += String(" / tls: ") + tlsErr;
+      }
+      d.err += " / heap " + String(ESP.getFreeHeap() / 1024) + "k, block " + String(ESP.getMaxAllocHeap() / 1024) + "k";
+      return;
+    }
+    net->print("GET " + path + " HTTP/1.1
+
+Host: " + host +
+               "
+
+User-Agent: curl/8.9.1
+
+Accept: */*
+
+Connection: close
+
+
+
+");
+    Stream& in = *net;
+    in.setTimeout(20000);
+    String status = in.readStringUntil('
+');  // "HTTP/1.1 200 OK"
+    code = status.substring(status.indexOf(' ') + 1).toInt();
+    String location;
+    bool chunked = false;
+    for (;;) {
+      String h = in.readStringUntil('
+');
+      h.trim();
+      if (!h.length()) break;
+      String lower = h;
+      lower.toLowerCase();
+      if (lower.startsWith("location:")) location = h.substring(9);
+      if (lower.startsWith("transfer-encoding:") && lower.indexOf("chunked") > 0) chunked = true;
+    }
+    location.trim();
+    LOG("  GET %s -> %d%s", host.c_str(), code, chunked ? " (chunked)" : "");
+    body = ChunkedStream(*net, chunked);
+    if (code >= 300 && code < 400 && location.length()) {
+      url = location.startsWith("http") ? location : String(https ? "https://" : "http://") + host + location;
+      continue;
+    }
+    break;
   }
   if (code != 200) {
-    d.err = code > 0 ? "HTTP " + String(code) : String(http.errorToString(code));
-    if (code < 0) {
-      char tlsErr[100] = "";
-      if (gCfg.icsUrl.startsWith("https")) tls.lastError(tlsErr, sizeof(tlsErr));
-      if (*tlsErr) d.err += String(" / tls: ") + tlsErr;
-      d.err += " / heap " + String(ESP.getFreeHeap() / 1024) + "k, block " + String(ESP.getMaxAllocHeap() / 1024) + "k";
-    }
-    http.end();
+    // Show what the server says (a 403 page usually names the reason) on the screen, not only in the log.
+    String page;
+    while (page.length() < 400) { int c = body.read(); if (c < 0) break; page += (char)c; }
+    net->stop();
+    int t = page.indexOf("<title>");
+    String why = t >= 0 ? page.substring(t + 7, page.indexOf("</title>", t)) : page;
+    why.replace("
+", "");
+    why.replace("
+", " ");
+    why.trim();
+    LOG("calendar: HTTP %d, server says: %s", code, page.c_str());
+    d.err = code > 0 ? "HTTP " + String(code) : String("no response");
+    if (why.length()) d.err += ": " + why.substring(0, 60);
     return;
   }
 
-  WiFiClient& stream = http.getStream();
   Meeting cur;
   bool inEvent = false, allDay = false;
   String pending;
   size_t bytesRead = 0;
-  int total = http.getSize();  // -1 when the server sends no Content-Length
+  int total = -1;
   uint32_t t0 = millis();
   // Outlook lists events oldest first, so today's are near the end: read the whole file.
   uint32_t deadline = t0 + 90000;
-  while ((stream.connected() || stream.available()) && millis() < deadline) {
-    if (!stream.available()) { delay(5); continue; }
-    String line = stream.readStringUntil('\n');
+  body.setTimeout(15000);
+  while (millis() < deadline) {
+    String line = body.readLine();
+    if (!line.length() && body.done()) break;
     bytesRead += line.length() + 1;
     // Folded lines continue the previous one with a leading space.
-    bool folded = line.length() && (line[0] == ' ' || line[0] == '\t');
+    bool folded = line.length() && (line[0] == ' ' || line[0] == '	');
     line.trim();
     if (folded && pending.length()) { if (pending.length() < 800) pending += line; continue; }
     if (pending.length()) handleIcsLine(pending, d, cur, inEvent, allDay, dayStart, dayEnd);
     pending = line.substring(0, 800);
   }
   if (pending.length()) handleIcsLine(pending, d, cur, inEvent, allDay, dayStart, dayEnd);
-  http.end();
+  net->stop();
   bool timedOut = millis() >= deadline;
   LOG("calendar: read %u of %d bytes in %lu ms%s, %d meetings today", (unsigned)bytesRead, total,
       millis() - t0, timedOut ? " (TIMED OUT)" : "", d.count);
