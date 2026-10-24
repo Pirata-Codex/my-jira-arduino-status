@@ -49,6 +49,7 @@ static int agLayout = -1;  // number of rows the slots are currently sized for
 // Cards
 static lv_obj_t *cardList, *cardMsg;
 static TicketSlot cardRows[MAX_CARD_ROWS];
+static int cardRowsBuilt = 0;  // slots are created on first use, so unused ones cost no RAM
 static TicketSlot nowTickets[2];
 static lv_obj_t* nowMsg;
 static uint32_t cardsDwellMs = 0;  // how long the cards slide needs to show every page once
@@ -59,6 +60,7 @@ static lv_obj_t *hlSummary, *hlGrid, *hlMsg;
 struct HealthSlot { lv_obj_t *box, *outline, *dot, *name, *sub, *track, *fill; };
 constexpr int MAX_HEALTH_TILES = 8;
 static HealthSlot hlTiles[MAX_HEALTH_TILES];
+static int hlTilesBuilt = 0;
 
 static const int CONTENT_Y = 40;      // between the header (0..36) and the tab bar (268..316)
 
@@ -551,7 +553,7 @@ static void buildAgenda() {
 static void buildCards() {
   lv_obj_t* s = screens[PG_CARDS] = newScreen();
   cardList = plain(s, 6, CONTENT_Y, 468, 224);
-  for (int i = 0; i < MAX_CARD_ROWS; i++) cardRows[i] = makeTicket(cardList, 0, i * 45, 468);
+  cardRowsBuilt = 0;  // rows are created by drawCardPage, only as many as a page shows
   cardMsg = makeMsg(cardList);
 }
 
@@ -579,21 +581,7 @@ static void buildHealth() {
   hlSummary = hudText(s, F_HUD, C_MUTED, "");
   lv_obj_align(hlSummary, LV_ALIGN_TOP_RIGHT, -12, CONTENT_Y + 2);
   hlGrid = plain(s, 6, CONTENT_Y + 20, 468, 204);
-  // Fixed tiles, filled in place by renderHealth (see the note on list slots).
-  for (int i = 0; i < MAX_HEALTH_TILES; i++) {
-    HealthSlot& t = hlTiles[i];
-    t.box = panel(hlGrid, (i % 2) * 237, (i / 2) * 52, 231, 46, 6, C_LINE, false, &t.outline);
-    t.dot = rect(t.box, 10, 10, 8, 8, C_LIME, LV_RADIUS_CIRCLE);
-    t.name = hudText(t.box, F_HUD_M, C_TEXT, "");
-    lv_obj_set_width(t.name, 196);
-    lv_label_set_long_mode(t.name, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(t.name, 26, 4);
-    t.sub = hudText(t.box, F_HUD, C_MUTED, "");
-    lv_obj_set_pos(t.sub, 26, 26);
-    t.track = rect(t.box, 150, 32, 70, 3, C_DIM);
-    t.fill = rect(t.box, 150, 32, 1, 3, C_LIME);
-    lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN);
-  }
+  hlTilesBuilt = 0;  // tiles are created by renderHealth as monitors appear
   hlMsg = makeMsg(hlGrid);
 }
 
@@ -923,7 +911,10 @@ static void drawCardPage() {
   String err = "JIRA: " + s.err;
   setMsg(cardMsg, !empty ? nullptr : !s.ok ? err.c_str() : s.count ? "ALL CARDS ARE DONE" : "NO CARDS IN THIS SPRINT");
   int first = cardPage * CARDS_PER_PAGE;
-  for (int i = 0; i < MAX_CARD_ROWS; i++) {
+  int need = empty ? 0 : min(min(CARDS_PER_PAGE, MAX_CARD_ROWS), cardOrderLen);
+  for (; cardRowsBuilt < need; cardRowsBuilt++)
+    cardRows[cardRowsBuilt] = makeTicket(cardList, 0, cardRowsBuilt * 45, 468);
+  for (int i = 0; i < cardRowsBuilt; i++) {
     int n = first + i;
     bool show = !empty && i < CARDS_PER_PAGE && n < cardOrderLen;
     fillTicket(cardRows[i], show ? &s.cards[cardOrder[n]] : nullptr);
@@ -992,10 +983,28 @@ static void renderKpi() {
   setKpi(5, k2, s.kpi2 < 0 ? "-" : String(s.kpi2), "JIRA QUERY", s.kpi2 > 0 ? C_RED : C_LIME);
 }
 
+// Creates tiles up to n (they are kept and reused; only as many as there are monitors).
+static void ensureHealthTiles(int n) {
+  for (; hlTilesBuilt < n; hlTilesBuilt++) {
+    int i = hlTilesBuilt;
+    HealthSlot& t = hlTiles[i];
+    t.box = panel(hlGrid, (i % 2) * 237, (i / 2) * 52, 231, 46, 6, C_LINE, false, &t.outline);
+    t.dot = rect(t.box, 10, 10, 8, 8, C_LIME, LV_RADIUS_CIRCLE);
+    t.name = hudText(t.box, F_HUD_M, C_TEXT, "");
+    lv_obj_set_width(t.name, 196);
+    lv_label_set_long_mode(t.name, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(t.name, 26, 4);
+    t.sub = hudText(t.box, F_HUD, C_MUTED, "");
+    lv_obj_set_pos(t.sub, 26, 26);
+    t.track = rect(t.box, 150, 32, 70, 3, C_DIM);
+    t.fill = rect(t.box, 150, 32, 1, 3, C_LIME);
+  }
+}
+
 static void renderHealth() {
   const HealthData& h = snap.health;
   if (!h.ok && !h.count) {
-    for (HealthSlot& t : hlTiles) lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN);
+    for (int i = 0; i < hlTilesBuilt; i++) lv_obj_add_flag(hlTiles[i].box, LV_OBJ_FLAG_HIDDEN);
     String err = "KUMA: " + h.err;
     setMsg(hlMsg, h.err.length() ? err.c_str() : "LOADING...");
     lv_label_set_text(hlSummary, "");
@@ -1004,7 +1013,8 @@ static void renderHealth() {
   setMsg(hlMsg, nullptr);
   float upSum = 0;
   int upN = 0;
-  for (int i = 0; i < MAX_HEALTH_TILES; i++) {
+  ensureHealthTiles(min(h.count, MAX_HEALTH_TILES));
+  for (int i = 0; i < hlTilesBuilt; i++) {
     HealthSlot& t = hlTiles[i];
     if (i >= h.count) { lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN); continue; }
     const Monitor& m = h.m[i];
