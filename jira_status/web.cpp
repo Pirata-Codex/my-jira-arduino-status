@@ -115,6 +115,7 @@ static void handleSave() {
   gCfg.kumaUrl = arg("kumaUrl");
   gCfg.kumaSlug = arg("kumaSlug");
   gCfg.icsUrl = arg("icsUrl");
+  gCfg.icsUrl.trim();
   gCfg.brightness = constrain(arg("bright").toInt(), 10, 255);
   gCfg.rotateSec = constrain(arg("rotate").toInt(), 4, 120);
   gCfg.refreshMin = constrain(arg("refresh").toInt(), 2, 240);

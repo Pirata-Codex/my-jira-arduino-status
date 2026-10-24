@@ -550,22 +550,28 @@ static String lanIcsUrl() {
   return ps < 0 ? "" : String("http://") + ICS_LAN_HOST + u.substring(ps);
 }
 
-// Tries the configured link, then the internal server, alternating, up to 4 attempts in all
-// (the public server also fails intermittently).
+// Tries the configured link up to 3 times (the public server fails intermittently). On the company
+// network (a 10.x address) the internal server is tried last; elsewhere it can't be reached.
 static void fetchCalendar(MeetingData& d) {
-  String lan = lanIcsUrl();
-  for (int attempt = 1; attempt <= 4; attempt++) {
-    bool useLan = lan.length() && attempt % 2 == 0;
-    fetchCalendarUnlocked(d, useLan ? lan : gCfg.icsUrl);
+  String link = gCfg.icsUrl;
+  link.trim();  // a stray space or newline from pasting ends up in the request path
+  String lan = WiFi.localIP()[0] == 10 ? lanIcsUrl() : String();
+  MeetingData first;
+  int tries = lan.length() ? 4 : 3;
+  for (int attempt = 1; attempt <= tries; attempt++) {
+    bool useLan = attempt == 4;
+    fetchCalendarUnlocked(d, useLan ? lan : link);
     if (d.ok || !d.configured) {
       if (d.ok) LOG("calendar: ok via %s", useLan ? "internal server" : "configured link");
       return;
     }
-    if (attempt < 4) {
-      LOG("calendar: %s, retry %d/3", d.err.c_str(), attempt);
+    if (attempt == 1) first.err = d.err;
+    if (attempt < tries) {
+      LOG("calendar: %s, retry %d/%d", d.err.c_str(), attempt, tries - 1);
       delay(1000 * attempt);
     }
   }
+  if (lan.length()) d.err = first.err + " (internal: " + d.err + ")";
 }
 
 static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
@@ -632,7 +638,8 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
       if (lower.startsWith("transfer-encoding:") && lower.indexOf("chunked") > 0) chunked = true;
     }
     location.trim();
-    LOG("  GET %s -> %d%s", host.c_str(), code, chunked ? " (chunked)" : "");
+    LOG("  GET %s -> %d%s (path %u chars, ends \"%s\")", host.c_str(), code, chunked ? " (chunked)" : "",
+        (unsigned)path.length(), path.substring(max(0, (int)path.length() - 16)).c_str());
     body = ChunkedStream(*net, chunked);
     if (code >= 300 && code < 400 && location.length()) {
       url = location.startsWith("http") ? location : String(https ? "https://" : "http://") + host + location;
