@@ -5,6 +5,7 @@
 // ("SSL - Memory allocation failed"). Here LVGL gets its own region, reserved once at boot before
 // WiFi starts, so its churn stays inside that region. When the region is full, LVGL falls back to
 // the normal heap instead of failing, so a too-small pool costs fragmentation, never a crash.
+#include <Arduino.h>  // Serial, millis, ESP for LOG (a .cpp file doesn't get it automatically)
 #include <lvgl.h>
 #include <esp_heap_caps.h>
 #include <multi_heap.h>
