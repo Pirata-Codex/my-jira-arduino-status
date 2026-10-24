@@ -592,6 +592,7 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
   String url = url0;
   Client* net = nullptr;
   ChunkedStream body(tls);
+  String headers, server;  // of the last response, logged on failure (they name the firewall)
   int code = 0;
   for (int hop = 0; hop < 3; hop++) {  // follow up to 2 redirects
     String host, path;
@@ -617,6 +618,7 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
     String status = in.readStringUntil('\n');  // "HTTP/1.1 200 OK"
     code = status.substring(status.indexOf(' ') + 1).toInt();
     String location;
+    headers = server = "";
     bool chunked = false;
     for (;;) {
       String h = in.readStringUntil('\n');
@@ -625,6 +627,8 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
       String lower = h;
       lower.toLowerCase();
       if (lower.startsWith("location:")) location = h.substring(9);
+      if (lower.startsWith("server:")) { server = h.substring(7); server.trim(); }
+      if (headers.length() < 600) headers += h + " | ";
       if (lower.startsWith("transfer-encoding:") && lower.indexOf("chunked") > 0) chunked = true;
     }
     location.trim();
@@ -647,7 +651,9 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
     why.replace("\n", " ");
     why.trim();
     LOG("calendar: HTTP %d, server says: %s", code, page.c_str());
+    LOG("calendar: response headers: %s", headers.c_str());
     d.err = code > 0 ? "HTTP " + String(code) : String("no response");
+    if (server.length()) d.err += " [" + server + "]";
     if (why.length()) d.err += ": " + why.substring(0, 60);
     return;
   }
