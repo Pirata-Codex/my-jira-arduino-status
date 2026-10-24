@@ -151,6 +151,17 @@ void loop() {
   web_loop();
   RefreshKind due = fetch_due();
   if (due != REFRESH_NONE) ui_refresh(due);
+  // Daily restart for a clean heap (skipped in the first hour after boot, so it runs once).
+  if (NIGHTLY_RESTART_HOUR >= 0 && millis() > 3600000UL) {
+    time_t now = time(nullptr);
+    struct tm lt;
+    localtime_r(&now, &lt);
+    if (now > 1700000000 && lt.tm_hour == NIGHTLY_RESTART_HOUR && lt.tm_min == 0) {
+      LOG("restart: nightly");
+      Serial.flush();
+      ESP.restart();
+    }
+  }
   static uint32_t lastBeat = 0;
   if (millis() - lastBeat > 10000) {
     lastBeat = millis();

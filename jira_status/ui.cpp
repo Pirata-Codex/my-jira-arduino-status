@@ -55,7 +55,10 @@ static uint32_t cardsDwellMs = 0;  // how long the cards slide needs to show eve
 // KPIs
 static lv_obj_t *kpiVal[6], *kpiLbl[6], *kpiSub[6];
 // Health
-static lv_obj_t *hlSummary, *hlGrid;
+static lv_obj_t *hlSummary, *hlGrid, *hlMsg;
+struct HealthSlot { lv_obj_t *box, *outline, *dot, *name, *sub, *track, *fill; };
+constexpr int MAX_HEALTH_TILES = 8;
+static HealthSlot hlTiles[MAX_HEALTH_TILES];
 
 static const int CONTENT_Y = 40;      // between the header (0..36) and the tab bar (268..316)
 
@@ -576,6 +579,22 @@ static void buildHealth() {
   hlSummary = hudText(s, F_HUD, C_MUTED, "");
   lv_obj_align(hlSummary, LV_ALIGN_TOP_RIGHT, -12, CONTENT_Y + 2);
   hlGrid = plain(s, 6, CONTENT_Y + 20, 468, 204);
+  // Fixed tiles, filled in place by renderHealth (see the note on list slots).
+  for (int i = 0; i < MAX_HEALTH_TILES; i++) {
+    HealthSlot& t = hlTiles[i];
+    t.box = panel(hlGrid, (i % 2) * 237, (i / 2) * 52, 231, 46, 6, C_LINE, false, &t.outline);
+    t.dot = rect(t.box, 10, 10, 8, 8, C_LIME, LV_RADIUS_CIRCLE);
+    t.name = hudText(t.box, F_HUD_M, C_TEXT, "");
+    lv_obj_set_width(t.name, 196);
+    lv_label_set_long_mode(t.name, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(t.name, 26, 4);
+    t.sub = hudText(t.box, F_HUD, C_MUTED, "");
+    lv_obj_set_pos(t.sub, 26, 26);
+    t.track = rect(t.box, 150, 32, 70, 3, C_DIM);
+    t.fill = rect(t.box, 150, 32, 1, 3, C_LIME);
+    lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN);
+  }
+  hlMsg = makeMsg(hlGrid);
 }
 
 // ---------- refresh screen ----------
@@ -974,33 +993,43 @@ static void renderKpi() {
 }
 
 static void renderHealth() {
-  lv_obj_clean(hlGrid);
   const HealthData& h = snap.health;
   if (!h.ok && !h.count) {
-    errorText(hlGrid, 6, 6, h.err.length() ? ("KUMA: " + h.err).c_str() : "LOADING...");
+    for (HealthSlot& t : hlTiles) lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN);
+    String err = "KUMA: " + h.err;
+    setMsg(hlMsg, h.err.length() ? err.c_str() : "LOADING...");
     lv_label_set_text(hlSummary, "");
     return;
   }
+  setMsg(hlMsg, nullptr);
   float upSum = 0;
   int upN = 0;
-  for (int i = 0; i < h.count && i < 8; i++) {
+  for (int i = 0; i < MAX_HEALTH_TILES; i++) {
+    HealthSlot& t = hlTiles[i];
+    if (i >= h.count) { lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN); continue; }
     const Monitor& m = h.m[i];
-    lv_obj_t* t = panel(hlGrid, (i % 2) * 237, (i / 2) * 52, 231, 46, 6, m.up ? C_LINE : C_RED);
-    rect(t, 10, 10, 8, 8, m.up ? C_LIME : C_RED, LV_RADIUS_CIRCLE);
+    lv_obj_set_style_line_color(t.outline, m.up ? C_LINE : C_RED, 0);
+    lv_obj_set_style_bg_color(t.dot, m.up ? C_LIME : C_RED, 0);
     // Long monitor names (e.g. "CRM-CheckedCache-LoginTest") use the small font so they fit the tile.
-    lv_obj_t* name = hudText(t, m.name.length() > 18 ? F_HUD : F_HUD_M, m.up ? C_TEXT : C_RED, m.name.c_str());
-    lv_obj_set_width(name, 196);
-    lv_label_set_long_mode(name, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(name, 26, 4);
+    lv_obj_set_style_text_font(t.name, m.name.length() > 18 ? F_HUD : F_HUD_M, 0);
+    lv_obj_set_style_text_color(t.name, m.up ? C_TEXT : C_RED, 0);
+    lv_label_set_text(t.name, m.name.c_str());
     String sub = m.up ? (m.ping >= 0 ? String(m.ping) + " MS" : String("UP")) : String("DOWN");
     if (m.uptime >= 0) sub += " · " + String(m.uptime * 100, 1) + "%";
-    lv_obj_set_pos(hudText(t, F_HUD, m.up ? C_MUTED : C_RED, sub.c_str()), 26, 26);
+    lv_label_set_text(t.sub, sub.c_str());
+    lv_obj_set_style_text_color(t.sub, m.up ? C_MUTED : C_RED, 0);
     if (m.uptime >= 0) {
-      rect(t, 150, 32, 70, 3, C_DIM);
-      rect(t, 150, 32, max(1, (int)(70 * m.uptime)), 3, m.uptime > 0.99f ? C_LIME : m.uptime > 0.9f ? C_AMBER : C_RED);
+      lv_obj_remove_flag(t.track, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(t.fill, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_width(t.fill, max(1, (int)(70 * m.uptime)));
+      lv_obj_set_style_bg_color(t.fill, m.uptime > 0.99f ? C_LIME : m.uptime > 0.9f ? C_AMBER : C_RED, 0);
       upSum += m.uptime;
       upN++;
+    } else {
+      lv_obj_add_flag(t.track, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(t.fill, LV_OBJ_FLAG_HIDDEN);
     }
+    lv_obj_remove_flag(t.box, LV_OBJ_FLAG_HIDDEN);
   }
   String sum = String(h.up) + "/" + String(h.count) + " UP";
   if (upN) sum += " · 24H " + String(100 * upSum / upN, 2) + "%";
@@ -1238,7 +1267,43 @@ void ui_tick() {
     showPage((page + 1) % PG_COUNT, true);
 }
 
+// Restarting is the recovery for a fragmented heap: everything is fetched again on boot.
+static void restartFor(const char* why) {
+  // Not in the first 10 minutes after boot: a cause a restart can't fix would loop forever.
+  if (millis() < 600000UL) { LOG("restart skipped (just booted): %s", why); return; }
+  LOG("restart: %s", why);
+  Serial.flush();
+  delay(200);
+  ESP.restart();
+}
+
+// Any fetch that ran out of TLS memory (mbedTLS: "Memory allocation failed", ours: "no memory").
+static bool memoryError(const String& e) {
+  return e.indexOf("llocation") >= 0 || e.indexOf("memory") >= 0;
+}
+
+// Kuma check with the dashboard kept on screen: only the health data is copied and redrawn.
+static void refreshKumaInPlace() {
+  LOG("refresh: kuma in place");
+  fetch_all(nullptr, REFRESH_KUMA);
+  model_lock();
+  snap.health = gData.health;
+  seenVersion = gData.version;
+  model_unlock();
+  renderHealth();
+  const HealthData& h = snap.health;
+  if (h.count) {
+    lv_label_set_text_fmt(hdHealth, "%s %d/%d", h.up == h.count ? LV_SYMBOL_OK : LV_SYMBOL_WARNING, h.up, h.count);
+    lv_obj_set_style_text_color(hdHealth, h.up == h.count ? C_LIME : C_RED, 0);
+  }
+  if (memoryError(h.err)) restartFor("kuma ran out of memory");
+}
+
 void ui_refresh(RefreshKind kind) {
+  if (kind == REFRESH_KUMA && dashboardBuilt && ESP.getMaxAllocHeap() >= KUMA_INPLACE_BLOCK) {
+    refreshKumaInPlace();
+    return;
+  }
   LOG("refresh: start (%s)", kind == REFRESH_FULL ? "full" : "kuma");
   started = false;
   styleBanner(BN_NONE);
@@ -1262,8 +1327,13 @@ void ui_refresh(RefreshKind kind) {
   snap = Snapshot();
   lv_refr_now(nullptr);
   LOG("refresh: dashboard freed");
+  if (ESP.getMaxAllocHeap() < MIN_TLS_BLOCK) restartFor("heap too fragmented for HTTPS");
 
   fetch_all(onProgress, kind);
+  model_lock();
+  bool outOfMemory = memoryError(gData.sprint.err) || memoryError(gData.health.err) || memoryError(gData.meet.err);
+  model_unlock();
+  if (outOfMemory) restartFor("a fetch ran out of memory");
 
   lv_label_set_text(loadTitle, LV_SYMBOL_OK " DATA READY");
   lv_refr_now(nullptr);
