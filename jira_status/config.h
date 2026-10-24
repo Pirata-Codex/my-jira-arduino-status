@@ -25,6 +25,9 @@
 // Kuma checks run with the dashboard on screen while at least this much heap is free (bytes);
 // otherwise the dashboard is freed first. A fetch that runs out of TLS memory restarts the board.
 #define KUMA_INPLACE_HEAP 60000
+// LVGL's own memory region (lv_mem_pool.cpp). The full dashboard needs about 45 KB; anything beyond
+// the pool spills into the normal heap (logged as "overflow" in the heartbeat).
+#define LVGL_POOL_BYTES (48 * 1024)
 // Daily restart for a clean heap (local hour; -1 turns it off).
 #define NIGHTLY_RESTART_HOUR 4
 

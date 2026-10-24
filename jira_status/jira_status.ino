@@ -18,7 +18,9 @@
 
 // 1/10 of the screen, allocated at runtime (a static buffer doesn't fit the DRAM segment).
 // Fewer, larger SPI pushes; RAM allows it since the dashboard is freed during HTTPS refreshes.
-static const size_t DRAW_BUF_BYTES = TFT_HOR_RES * TFT_VER_RES / 10 * 2;
+// 1/20 of the screen (15 KB): drawing takes a few more passes, TLS gets 15 KB more.
+static const size_t DRAW_BUF_BYTES = TFT_HOR_RES * TFT_VER_RES / 20 * 2;
+void lvgl_pool_stats(unsigned& usedKb, unsigned& peakKb, unsigned& overflow);
 
 // HTTPS (TLS handshake + JSON) runs in loop() now; the default 8 KB loop stack overflowed.
 SET_LOOP_TASK_STACK_SIZE(20 * 1024);
@@ -165,7 +167,10 @@ void loop() {
   static uint32_t lastBeat = 0;
   if (millis() - lastBeat > 10000) {
     lastBeat = millis();
-    LOG("alive, wifi %d", (int)WiFi.status());
+    unsigned used, peak, overflow;
+    lvgl_pool_stats(used, peak, overflow);
+    LOG("alive, wifi %d, lvgl pool %uk used (peak %uk of %uk), overflow %u", (int)WiFi.status(), used, peak,
+        (unsigned)(LVGL_POOL_BYTES / 1024), overflow);
   }
   delay(5);
 }

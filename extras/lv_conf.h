@@ -6,8 +6,9 @@
 #define LV_CONF_H
 
 #define LV_COLOR_DEPTH 16
-/* Use the ESP32 heap instead of a static pool: a static pool overflows DRAM at link time. */
-#define LV_USE_STDLIB_MALLOC LV_STDLIB_CLIB
+/* LVGL's memory comes from its own region reserved at boot (jira_status/lv_mem_pool.cpp), so the
+ * screen can't fragment the heap the HTTPS connections need. A static pool overflows DRAM at link time. */
+#define LV_USE_STDLIB_MALLOC LV_STDLIB_CUSTOM
 #define LV_USE_STDLIB_STRING LV_STDLIB_CLIB
 #define LV_USE_STDLIB_SPRINTF LV_STDLIB_CLIB
 #define LV_DEF_REFR_PERIOD 20
