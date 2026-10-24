@@ -46,6 +46,8 @@ struct HealthData {
 struct Meeting {
   String title, where;
   time_t start = 0, end = 0;
+  uint32_t uid = 0;        // hash of the event UID (parsing only: matches moved/cancelled occurrences)
+  bool fromRule = false;   // an occurrence of a repeating event
 };
 
 struct MeetingData {

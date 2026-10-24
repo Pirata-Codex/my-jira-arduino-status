@@ -499,16 +499,181 @@ static String hhmmLog(time_t t) {
 
 static String icsDesc;  // DESCRIPTION of the event being parsed (only used for the place)
 
+// Repeating events. Outlook writes one VEVENT with an RRULE for the series, EXDATEs for deleted
+// occurrences, and a separate VEVENT with RECURRENCE-ID for each changed (moved, renamed or
+// cancelled) occurrence. Only today matters, so the series is expanded for today alone.
+static String icsRule;
+static time_t icsRecId;
+static bool icsCancelled;
+static uint32_t icsUid;
+constexpr int MAX_EXDATES = 24;
+static time_t icsExdates[MAX_EXDATES];
+static int icsExCount;
+// Today's occurrences replaced by a RECURRENCE-ID event: (uid, original start).
+constexpr int MAX_OVERRIDES = 16;
+static uint32_t ovUid[MAX_OVERRIDES];
+static time_t ovStart[MAX_OVERRIDES];
+static int ovCount;
+
+static uint32_t fnv1a(const String& s) {
+  uint32_t h = 2166136261u;
+  for (size_t i = 0; i < s.length(); i++) h = (h ^ (uint8_t)s[i]) * 16777619u;
+  return h;
+}
+
+static String ruleField(const String& rule, const char* key) {
+  String k = String(key) + "=";
+  int i = rule.startsWith(k) ? 0 : rule.indexOf(";" + k);
+  if (i < 0) return "";
+  if (i > 0) i++;
+  int e = rule.indexOf(';', i);
+  return rule.substring(i + k.length(), e < 0 ? rule.length() : e);
+}
+
+// Local midnight of the day containing t (Iran has no DST, so days are 86400 s).
+static time_t dayOf(time_t t) {
+  struct tm lt;
+  localtime_r(&t, &lt);
+  return localEpoch(lt.tm_year + 1900, lt.tm_mon + 1, lt.tm_mday, 0, 0, 0);
+}
+
+static int weekdayOf(time_t t) {
+  struct tm lt;
+  localtime_r(&t, &lt);
+  return lt.tm_wday;  // 0 = Sunday
+}
+
+static int weekdayCode(const String& s) {
+  static const char* codes[] = {"SU", "MO", "TU", "WE", "TH", "FR", "SA"};
+  String c = s.substring(max(0, (int)s.length() - 2));  // "1MO" (monthly form) -> "MO"
+  for (int i = 0; i < 7; i++) if (c == codes[i]) return i;
+  return -1;
+}
+
+// Start of today's occurrence of the series starting at dtStart, or 0 if it has none today.
+// Handles FREQ=DAILY and WEEKLY with INTERVAL, BYDAY, UNTIL, COUNT and WKST (what Outlook writes for
+// meetings); other frequencies are skipped.
+static time_t occurrenceToday(const String& rule, time_t dtStart, time_t dayStart) {
+  String freq = ruleField(rule, "FREQ");
+  bool daily = freq == "DAILY", weekly = freq == "WEEKLY";
+  if (!daily && !weekly) return 0;
+  int interval = max(1, (int)ruleField(rule, "INTERVAL").toInt());
+  int count = ruleField(rule, "COUNT").toInt();
+  String untilS = ruleField(rule, "UNTIL");
+  bool ad;
+  time_t until = untilS.length() ? parseIcsDate(untilS, ad) : 0;
+  if (until && ad) until += 86399;  // UNTIL as a date includes that whole day
+  bool days[7] = {};
+  bool anyDay = false;
+  String by = ruleField(rule, "BYDAY");
+  for (int i = 0; i < (int)by.length();) {
+    int e = by.indexOf(',', i);
+    if (e < 0) e = by.length();
+    int w = weekdayCode(by.substring(i, e));
+    if (w >= 0) { days[w] = true; anyDay = true; }
+    i = e + 1;
+  }
+  if (weekly && !anyDay) { days[weekdayOf(dtStart)] = true; anyDay = true; }
+  int wkst = weekdayCode(ruleField(rule, "WKST"));
+  if (wkst < 0) wkst = 1;  // RFC 5545 default: Monday
+
+  time_t startDay = dayOf(dtStart);
+  if (dayStart < startDay) return 0;
+  time_t tod = dtStart - startDay;
+  long lastDay = (dayStart - startDay) / 86400;
+  if (!count) {
+    // No COUNT: only today needs checking.
+    long n = lastDay;
+    time_t day = startDay + n * 86400;
+    int wd = weekdayOf(day);
+    if (anyDay && !days[wd]) return 0;
+    if (daily && n % interval) return 0;
+    if (weekly && interval > 1) {
+      time_t w0 = startDay - ((weekdayOf(startDay) - wkst + 7) % 7) * 86400L;
+      time_t w1 = day - ((wd - wkst + 7) % 7) * 86400L;
+      if (((w1 - w0) / (7 * 86400L)) % interval) return 0;
+    }
+    time_t occ = day + tod;
+    if (occ < dtStart || (until && occ > until)) return 0;
+    return occ;
+  }
+  // COUNT: walk the days from the start and count the occurrences up to today.
+  int seen = 0;
+  time_t w0 = startDay - ((weekdayOf(startDay) - wkst + 7) % 7) * 86400L;
+  for (long n = 0; n <= lastDay && n < 3700; n++) {
+    time_t day = startDay + n * 86400;
+    int wd = weekdayOf(day);
+    if (anyDay && !days[wd]) continue;
+    if (daily && n % interval) continue;
+    if (weekly && interval > 1) {
+      time_t w1 = day - ((wd - wkst + 7) % 7) * 86400L;
+      if (((w1 - w0) / (7 * 86400L)) % interval) continue;
+    }
+    time_t occ = day + tod;
+    if (occ < dtStart) continue;
+    if (++seen > count || (until && occ > until)) return 0;
+    if (n == lastDay) return occ;
+  }
+  return 0;
+}
+
+static void parseExdates(const String& value) {
+  bool ad;
+  for (int i = 0; i < (int)value.length();) {
+    int e = value.indexOf(',', i);
+    if (e < 0) e = value.length();
+    if (icsExCount < MAX_EXDATES) icsExdates[icsExCount++] = parseIcsDate(value.substring(i, e), ad);
+    i = e + 1;
+  }
+}
+
+// After the whole file: drop rule occurrences that a RECURRENCE-ID event replaced or cancelled.
+static void applyOverrides(MeetingData& d) {
+  for (int o = 0; o < ovCount; o++)
+    for (int i = 0; i < d.count; i++)
+      if (d.m[i].fromRule && d.m[i].uid == ovUid[o] && d.m[i].start == ovStart[o]) {
+        for (int j = i; j < d.count - 1; j++) d.m[j] = d.m[j + 1];
+        d.m[--d.count] = Meeting();
+        break;
+      }
+}
+
 static void handleIcsLine(const String& line, MeetingData& d, Meeting& cur, bool& inEvent, bool& allDay, time_t dayStart, time_t dayEnd) {
-  if (line == "BEGIN:VEVENT") { cur = Meeting(); icsDesc = ""; inEvent = true; allDay = false; return; }
+  if (line == "BEGIN:VEVENT") {
+    cur = Meeting();
+    icsDesc = icsRule = "";
+    icsRecId = 0;
+    icsCancelled = false;
+    icsUid = 0;
+    icsExCount = 0;
+    inEvent = true;
+    allDay = false;
+    return;
+  }
   if (!inEvent) return;
   if (line == "END:VEVENT") {
     inEvent = false;
-    if (!allDay && cur.start >= dayStart && cur.start < dayEnd) {
-      if (!cur.end) cur.end = cur.start + 30 * 60;
-      cur.where = meetingPlace(cur.where, cur.title, icsDesc).substring(0, 60);
-      addMeeting(d, cur);
+    if (allDay) return;
+    time_t dur = cur.end > cur.start ? cur.end - cur.start : 30 * 60;
+    if (icsRecId) {
+      // A changed occurrence: it replaces the series' occurrence at icsRecId.
+      if (icsRecId >= dayStart && icsRecId < dayEnd && ovCount < MAX_OVERRIDES) {
+        ovUid[ovCount] = icsUid;
+        ovStart[ovCount++] = icsRecId;
+      }
+    } else if (icsRule.length()) {
+      time_t occ = occurrenceToday(icsRule, cur.start, dayStart);
+      for (int i = 0; occ && i < icsExCount; i++)
+        if (icsExdates[i] == occ) occ = 0;
+      if (!occ) return;
+      cur.start = occ;
+      cur.fromRule = true;
     }
+    if (icsCancelled || cur.start < dayStart || cur.start >= dayEnd) return;
+    cur.end = cur.start + dur;
+    cur.uid = icsUid;
+    cur.where = meetingPlace(cur.where, cur.title, icsDesc).substring(0, 60);
+    addMeeting(d, cur);
     return;
   }
   // Name and value are split at the first ':' outside quotes: Outlook writes
@@ -530,6 +695,11 @@ static void handleIcsLine(const String& line, MeetingData& d, Meeting& cur, bool
   else if (name == "SUMMARY") { value.replace("\\,", ","); cur.title = value.substring(0, 80); }
   else if (name == "LOCATION") { value.replace("\\,", ","); cur.where = value.substring(0, 120); }
   else if (name == "DESCRIPTION") icsDesc = value.substring(0, 800);
+  else if (name == "RRULE") icsRule = value;
+  else if (name == "EXDATE") parseExdates(value);
+  else if (name == "RECURRENCE-ID") icsRecId = parseIcsDate(value, ad);
+  else if (name == "UID") icsUid = fnv1a(value);
+  else if (name == "STATUS") icsCancelled = value == "CANCELLED";
 }
 
 static bool getJson(const String& url, const String& bearer, JsonDocument& doc, const JsonDocument* filter, String& err) {
@@ -667,6 +837,7 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
 
   Meeting cur;
   bool inEvent = false, allDay = false;
+  ovCount = 0;
   String pending;
   size_t bytesRead = 0;
   int total = -1;
@@ -686,6 +857,7 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
     pending = line.substring(0, 800);
   }
   if (pending.length()) handleIcsLine(pending, d, cur, inEvent, allDay, dayStart, dayEnd);
+  applyOverrides(d);
   net->stop();
   bool timedOut = millis() >= deadline;
   LOG("calendar: read %u of %d bytes in %lu ms%s, %d meetings today", (unsigned)bytesRead, total,
