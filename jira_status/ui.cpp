@@ -1175,6 +1175,8 @@ void ui_refresh(RefreshKind kind) {
     agList = nullptr;
     dashboardBuilt = false;
   }
+  // The UI copy of the data is rebuilt after the fetch; free its strings now as well.
+  snap = Snapshot();
   lv_refr_now(nullptr);
   LOG("refresh: dashboard freed");
 

@@ -171,9 +171,14 @@ static void fetchJira(SprintData& s) {
   String fields = "summary,status,resolutiondate";
   if (gCfg.spField.length()) fields += "," + gCfg.spField;
   String url = base + "/rest/api/2/search?maxResults=" + String(MAX_CARDS) + "&fields=" + fields + "&jql=" + urlEncode(gCfg.jql);
+  // The issue list is the biggest JSON here: keep it only inside this block, so it is freed
+  // before the sprint and KPI calls need RAM for their own TLS handshakes.
+  {
   JsonDocument doc;
   report(STEP_CARDS, STEP_RUN);
-  if (!getJson(url, gCfg.jiraPat, doc, &filter, s.err)) {
+  bool got = getJson(url, gCfg.jiraPat, doc, &filter, s.err);
+  filter.clear();
+  if (!got) {
     report(STEP_CARDS, STEP_FAIL, s.err);
     report(STEP_SPRINT, STEP_SKIP);
     report(STEP_KPI, STEP_SKIP);
@@ -193,6 +198,8 @@ static void fetchJira(SprintData& s) {
     s.ptsTotal += c.pts;
     if (c.cat == CAT_DONE) s.ptsDone += c.pts;
   }
+  }
+  LOG("jira: cards parsed, issue list freed");
 
   report(STEP_CARDS, STEP_OK, String(s.count) + " cards, " + String(s.ptsDone, 1) + " / " + String(s.ptsTotal, 1) + " pts");
 
@@ -252,43 +259,127 @@ static void fetchJira(SprintData& s) {
 
 // ---------- Uptime Kuma (public status page API, no auth) ----------
 
+// Stream wrapper with one character of push-back, so the heartbeat reader can peek at the
+// next token and still hand a complete "{...}" to ArduinoJson.
+class PeekStream : public Stream {
+ public:
+  explicit PeekStream(Stream& s) : s_(s) {}
+  int read() override {
+    if (pending_ >= 0) { int c = pending_; pending_ = -1; return c; }
+    char c;
+    return s_.readBytes(&c, 1) == 1 ? (uint8_t)c : -1;  // blocking, uses the stream timeout
+  }
+  int peek() override {
+    if (pending_ < 0) pending_ = read();
+    return pending_;
+  }
+  int available() override { return (pending_ >= 0 ? 1 : 0) + s_.available(); }
+  size_t write(uint8_t) override { return 0; }
+  int skipSpace() {
+    while (peek() >= 0 && isspace(peek())) read();
+    return peek();
+  }
+
+ private:
+  Stream& s_;
+  int pending_ = -1;
+};
+
+struct Beat { int id = -1; bool up = true; int ping = -1; };
+
+// /api/status-page/heartbeat/<slug> holds ~100 beats per monitor (~40 KB). Building it as one JSON
+// document ran out of memory, so it is read beat by beat and only the newest beat per monitor is kept.
+static bool readHeartbeats(Stream& in, Beat* beats, int& n, int maxN, JsonDocument& uptime, String& err) {
+  n = 0;
+  in.setTimeout(10000);
+  if (!in.find((char*)"\"heartbeatList\":{")) { err = "kuma: no heartbeatList"; return false; }
+  PeekStream ps(in);
+  JsonDocument beatFilter;
+  beatFilter["status"] = true;
+  beatFilter["ping"] = true;
+  JsonDocument beat;
+  for (;;) {
+    int c = ps.skipSpace();
+    if (c == '}') { ps.read(); break; }
+    if (c == ',') { ps.read(); continue; }
+    if (c != '"') { err = "kuma: bad heartbeat list"; return false; }
+    ps.read();
+    String id = ps.readStringUntil('"');
+    if (ps.skipSpace() != ':') { err = "kuma: bad heartbeat list"; return false; }
+    ps.read();
+    if (ps.skipSpace() != '[') { err = "kuma: bad heartbeat list"; return false; }
+    ps.read();
+    Beat* b = n < maxN ? &beats[n++] : nullptr;
+    if (b) { *b = Beat(); b->id = id.toInt(); }
+    for (;;) {
+      int d = ps.skipSpace();
+      if (d == ']') { ps.read(); break; }
+      if (d == ',') { ps.read(); continue; }
+      if (d != '{') { err = "kuma: bad beat"; return false; }
+      DeserializationError e = deserializeJson(beat, ps, DeserializationOption::Filter(beatFilter));
+      if (e) { err = String("kuma beat: ") + e.c_str(); return false; }
+      if (b) {  // oldest first: the last one wins
+        int status = beat["status"] | 1;  // 0 down, 1 up, 2 pending, 3 maintenance
+        b->up = status != 0;
+        b->ping = beat["ping"] | -1;
+      }
+    }
+  }
+  // "uptimeList":{"74_24":1,...} is small; read it as one object.
+  if (ps.find((char*)"\"uptimeList\":")) {
+    DeserializationError e = deserializeJson(uptime, ps);
+    if (e) LOG("kuma: uptime list: %s", e.c_str());
+  }
+  return true;
+}
+
 static void fetchKuma(HealthData& h) {
   h = HealthData();
   if (gCfg.kumaUrl.isEmpty() || gCfg.kumaSlug.isEmpty()) { h.err = "not configured"; return; }
   String base = trimSlash(gCfg.kumaUrl);
 
-  JsonDocument f1;
-  JsonObject mf = f1["publicGroupList"][0]["monitorList"][0].to<JsonObject>();
-  mf["id"] = true;
-  mf["name"] = true;
-  JsonDocument page;
-  if (!getJson(base + "/api/status-page/" + gCfg.kumaSlug, "", page, &f1, h.err)) return;
-
-  // Heartbeats are oldest-first; keep only status and ping to save RAM.
-  JsonDocument f2;
-  JsonObject beat = f2["heartbeatList"]["*"][0].to<JsonObject>();
-  beat["status"] = true;
-  beat["ping"] = true;
-  f2["uptimeList"]["*"] = true;
-  JsonDocument beats;
-  if (!getJson(base + "/api/status-page/heartbeat/" + gCfg.kumaSlug, "", beats, &f2, h.err)) return;
-
-  for (JsonObject group : page["publicGroupList"].as<JsonArray>()) {
-    for (JsonObject mon : group["monitorList"].as<JsonArray>()) {
-      if (h.count >= MAX_MONITORS) break;
-      Monitor& m = h.m[h.count++];
-      String id = String(mon["id"].as<int>());
-      m.name = mon["name"].as<const char*>();
-      JsonArray list = beats["heartbeatList"][id];
-      if (list.size()) {
-        JsonObject last = list[list.size() - 1];
-        int status = last["status"] | 1;   // 0 down, 1 up, 2 pending, 3 maintenance
-        m.up = status != 0;
-        m.ping = last["ping"] | -1;
+  // 1) Monitor ids and names from the status page (small); copied out so the JSON is freed at once.
+  int ids[MAX_MONITORS];
+  {
+    JsonDocument f1;
+    JsonObject mf = f1["publicGroupList"][0]["monitorList"][0].to<JsonObject>();
+    mf["id"] = true;
+    mf["name"] = true;
+    JsonDocument page;
+    if (!getJson(base + "/api/status-page/" + gCfg.kumaSlug, "", page, &f1, h.err)) return;
+    for (JsonObject group : page["publicGroupList"].as<JsonArray>())
+      for (JsonObject mon : group["monitorList"].as<JsonArray>()) {
+        if (h.count >= MAX_MONITORS) break;
+        ids[h.count] = mon["id"] | -1;
+        h.m[h.count++].name = mon["name"].as<const char*>();
       }
-      m.uptime = beats["uptimeList"][id + "_24"] | -1.0f;
-      if (m.up) h.up++;
-    }
+  }
+
+  // 2) Latest beat per monitor, streamed.
+  HTTPClient http;
+  WiFiClientSecure tls;
+  WiFiClient plain;
+  String url = base + "/api/status-page/heartbeat/" + gCfg.kumaSlug;
+  if (!begin(http, tls, plain, url)) { h.err = "bad url"; return; }
+  int code = timedGet(http);
+  if (code != 200) {
+    h.err = code > 0 ? "HTTP " + String(code) : String(http.errorToString(code));
+    http.end();
+    return;
+  }
+  static Beat beats[16];
+  int nBeats = 0;
+  JsonDocument uptime;
+  bool ok = readHeartbeats(http.getStream(), beats, nBeats, 16, uptime, h.err);
+  http.end();
+  if (!ok) return;
+
+  for (int i = 0; i < h.count; i++) {
+    Monitor& m = h.m[i];
+    for (int j = 0; j < nBeats; j++)
+      if (beats[j].id == ids[i]) { m.up = beats[j].up; m.ping = beats[j].ping; }
+    m.uptime = uptime[String(ids[i]) + "_24"] | -1.0f;
+    if (m.up) h.up++;
   }
   h.ok = true;
   h.updated = time(nullptr);
