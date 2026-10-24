@@ -778,6 +778,7 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
   ChunkedStream body(tls);
   String headers, server;  // of the last response, logged on failure (they name the firewall)
   int code = 0;
+  int total = -1;  // Content-Length, when the server sends one
   for (int hop = 0; hop < 3; hop++) {  // follow up to 2 redirects
     String host, path;
     uint16_t port;
@@ -804,6 +805,7 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
     String location;
     headers = server = "";
     bool chunked = false;
+    total = -1;
     for (;;) {
       String h = in.readStringUntil('\n');
       h.trim();
@@ -811,6 +813,7 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
       String lower = h;
       lower.toLowerCase();
       if (lower.startsWith("location:")) location = h.substring(9);
+      if (lower.startsWith("content-length:")) total = h.substring(15).toInt();
       if (lower.startsWith("server:")) { server = h.substring(7); server.trim(); }
       if (headers.length() < 600) headers += h + " | ";
       if (lower.startsWith("transfer-encoding:") && lower.indexOf("chunked") > 0) chunked = true;
@@ -848,7 +851,6 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
   ovCount = 0;
   String pending;
   size_t bytesRead = 0;
-  int total = -1;
   uint32_t t0 = millis();
   // Outlook lists events oldest first, so today's are near the end: read the whole file.
   uint32_t deadline = t0 + 90000;
@@ -878,6 +880,15 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
   if (timedOut) {
     // A cut-off file would silently miss today's events (they are at the end); report it instead.
     d.err = "timed out after " + String(bytesRead / 1024) + " KB";
+    return;
+  }
+  if (total > 0 && bytesRead < (size_t)total) {
+    // The connection dropped mid-file. Today's events are at the end, so this would show a
+    // shortened day as if it were complete: fail instead, so the next try reads it again.
+    char tlsErr[100] = "";
+    tls.lastError(tlsErr, sizeof(tlsErr));
+    LOG("calendar: cut off at %u of %d bytes, tls: %s", (unsigned)bytesRead, total, tlsErr);
+    d.err = "cut off at " + String(bytesRead / 1024) + " of " + String(total / 1024) + " KB";
     return;
   }
   d.ok = true;
