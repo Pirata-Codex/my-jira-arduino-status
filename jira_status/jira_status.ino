@@ -70,6 +70,66 @@ static bool tryEnterprise() {
   return false;
 }
 
+// ---------- screenshot ----------
+// The display can't be read back (no MISO pin), so a screenshot redraws the whole screen once and
+// sends each strip LVGL renders to the browser as well as to the display: no extra RAM.
+static WiFiClient* shotClient = nullptr;
+static int shotRow = 0;
+
+// Same as the lv_tft_espi driver's flush (its driver data starts with the TFT_eSPI pointer),
+// plus the copy for a screenshot in progress.
+static void flushWithCapture(lv_display_t* disp, const lv_area_t* area, uint8_t* px) {
+  TFT_eSPI* tft = *(TFT_eSPI**)lv_display_get_driver_data(disp);
+  uint32_t w = area->x2 - area->x1 + 1, h = area->y2 - area->y1 + 1;
+  tft->startWrite();
+  tft->setAddrWindow(area->x1, area->y1, w, h);
+  tft->pushColors((uint16_t*)px, w * h, true);
+  tft->endWrite();
+  if (shotClient && area->x1 == 0 && (int)w == lv_display_get_horizontal_resolution(disp) && area->y1 == shotRow) {
+    shotClient->write(px, w * h * 2);
+    shotRow = area->y2 + 1;
+  }
+  lv_display_flush_ready(disp);
+}
+
+static void put16(uint8_t* p, uint16_t v) { p[0] = v; p[1] = v >> 8; }
+static void put32(uint8_t* p, uint32_t v) { put16(p, v); put16(p + 2, v >> 16); }
+
+// Writes the screen to c as a top-down 16-bit BMP (RGB565, the draw buffer's own format).
+size_t display_screenshot(WiFiClient& c) {
+  lv_display_t* disp = lv_display_get_default();
+  int w = lv_display_get_horizontal_resolution(disp), h = lv_display_get_vertical_resolution(disp);
+  uint32_t data = (uint32_t)w * h * 2, size = 66 + data;
+  uint8_t hd[66] = {'B', 'M'};
+  put32(hd + 2, size);
+  put32(hd + 10, 66);              // pixel data offset
+  put32(hd + 14, 40);              // BITMAPINFOHEADER
+  put32(hd + 18, w);
+  put32(hd + 22, (uint32_t)-h);    // negative height: rows top to bottom
+  put16(hd + 26, 1);
+  put16(hd + 28, 16);
+  put32(hd + 30, 3);               // BI_BITFIELDS
+  put32(hd + 34, data);
+  put32(hd + 54, 0xF800);          // red, green, blue masks
+  put32(hd + 58, 0x07E0);
+  put32(hd + 62, 0x001F);
+  c.write(hd, sizeof(hd));
+  shotClient = &c;
+  shotRow = 0;
+  lv_obj_invalidate(lv_screen_active());
+  lv_refr_now(disp);
+  shotClient = nullptr;
+  // Rows LVGL didn't send in order (rare) are sent black, so the file is always complete.
+  static const uint8_t zero[64] = {};
+  for (uint32_t left = (uint32_t)(h - shotRow) * w * 2; left;) {
+    size_t n = left < sizeof(zero) ? left : sizeof(zero);
+    c.write(zero, n);
+    left -= n;
+  }
+  LOG("screenshot: %dx%d, %d rows captured", w, h, shotRow);
+  return size;
+}
+
 void setup() {
   Serial.begin(115200);
   delay(200);
@@ -84,6 +144,7 @@ void setup() {
   void* drawBuf = heap_caps_malloc(DRAW_BUF_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
   lv_display_t* disp = lv_tft_espi_create(TFT_HOR_RES, TFT_VER_RES, drawBuf, DRAW_BUF_BYTES);
   lv_display_set_rotation(disp, SCREEN_ROTATION);
+  lv_display_set_flush_cb(disp, flushWithCapture);
   ui_init();
   ui_apply_settings();
 

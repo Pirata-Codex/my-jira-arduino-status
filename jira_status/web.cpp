@@ -4,6 +4,7 @@
 #include "fetch.h"
 #include "model.h"
 #include "ui.h"
+#include <lvgl.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <HTTPUpdateServer.h>
@@ -11,6 +12,7 @@
 #include <ESPmDNS.h>
 
 static WebServer server(80);
+size_t display_screenshot(WiFiClient& c);  // jira_status.ino
 static HTTPUpdateServer updater;
 
 static String esc(const String& s) {
@@ -155,6 +157,17 @@ void web_begin() {
     fetch_request_refresh();
     server.sendHeader("Location", "/");
     server.send(303);
+  });
+  server.on("/screenshot", HTTP_GET, [] {
+    if (!auth()) return;
+    lv_display_t* disp = lv_display_get_default();
+    size_t size = 66 + (size_t)lv_display_get_horizontal_resolution(disp) * lv_display_get_vertical_resolution(disp) * 2;
+    server.setContentLength(size);
+    server.sendHeader("Content-Disposition", "inline; filename=board.bmp");
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "image/bmp", "");
+    WiFiClient c = server.client();
+    display_screenshot(c);
   });
   updater.setup(&server, "/update", "admin", gCfg.webPass.c_str());
   server.begin();
