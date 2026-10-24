@@ -409,11 +409,9 @@ class ChunkedStream : public Stream {
   int read() override {
     if (done_) return -1;
     if (chunked_ && left_ == 0) {
-      if (started_) s_->readStringUntil('
-');  // CRLF after the previous chunk
+      if (started_) s_->readStringUntil('\n');  // CRLF after the previous chunk
       started_ = true;
-      String size = s_->readStringUntil('
-');
+      String size = s_->readStringUntil('\n');
       size.trim();
       if (!size.length()) { done_ = true; return -1; }
       left_ = strtol(size.c_str(), nullptr, 16);
@@ -432,8 +430,7 @@ class ChunkedStream : public Stream {
   // Stream::readStringUntil waits out the whole timeout at the end of the body; this stops at once.
   String readLine() {
     String l;
-    for (int c = read(); c >= 0 && c != '
-'; c = read()) l += (char)c;
+    for (int c = read(); c >= 0 && c != '\n'; c = read()) l += (char)c;
     return l;
   }
 
@@ -591,30 +588,16 @@ static void fetchCalendarUnlocked(MeetingData& d) {
       d.err += " / heap " + String(ESP.getFreeHeap() / 1024) + "k, block " + String(ESP.getMaxAllocHeap() / 1024) + "k";
       return;
     }
-    net->print("GET " + path + " HTTP/1.1
-
-Host: " + host +
-               "
-
-User-Agent: curl/8.9.1
-
-Accept: */*
-
-Connection: close
-
-
-
-");
+    net->print("GET " + path + " HTTP/1.1\r\nHost: " + host +
+               "\r\nUser-Agent: curl/8.9.1\r\nAccept: */*\r\nConnection: close\r\n\r\n");
     Stream& in = *net;
     in.setTimeout(20000);
-    String status = in.readStringUntil('
-');  // "HTTP/1.1 200 OK"
+    String status = in.readStringUntil('\n');  // "HTTP/1.1 200 OK"
     code = status.substring(status.indexOf(' ') + 1).toInt();
     String location;
     bool chunked = false;
     for (;;) {
-      String h = in.readStringUntil('
-');
+      String h = in.readStringUntil('\n');
       h.trim();
       if (!h.length()) break;
       String lower = h;
@@ -638,10 +621,8 @@ Connection: close
     net->stop();
     int t = page.indexOf("<title>");
     String why = t >= 0 ? page.substring(t + 7, page.indexOf("</title>", t)) : page;
-    why.replace("
-", "");
-    why.replace("
-", " ");
+    why.replace("\r", "");
+    why.replace("\n", " ");
     why.trim();
     LOG("calendar: HTTP %d, server says: %s", code, page.c_str());
     d.err = code > 0 ? "HTTP " + String(code) : String("no response");
@@ -663,7 +644,7 @@ Connection: close
     if (!line.length() && body.done()) break;
     bytesRead += line.length() + 1;
     // Folded lines continue the previous one with a leading space.
-    bool folded = line.length() && (line[0] == ' ' || line[0] == '	');
+    bool folded = line.length() && (line[0] == ' ' || line[0] == '\t');
     line.trim();
     if (folded && pending.length()) { if (pending.length() < 800) pending += line; continue; }
     if (pending.length()) handleIcsLine(pending, d, cur, inEvent, allDay, dayStart, dayEnd);
