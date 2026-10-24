@@ -36,10 +36,21 @@ static lv_obj_t *nowLeg[4];
 // Sprint
 static lv_obj_t *spName, *spDays, *spBars[4], *spBarLbl[4], *spChart, *spFoot, *spBurnNote;
 static lv_chart_series_t *spSeries, *spIdeal;
+// List rows (cards, PULSE tickets, agenda) are fixed slots built once with their screen. Updates
+// only change text/colors and show or hide slots, so page flips and the per-minute tick don't
+// free and reallocate LVGL objects (that fragments the heap the HTTPS handshakes need).
+struct TicketSlot { lv_obj_t *box, *bar, *key, *title, *pill, *pillLbl, *pts; };
+struct MeetSlot { lv_obj_t *box, *outline, *bar, *start, *end, *title, *where, *pill, *pillLbl; };
+constexpr int MAX_CARD_ROWS = 5, MAX_AGENDA_ROWS = 4;
 // Agenda
-static lv_obj_t* agList;
+static lv_obj_t *agList, *agMsg;
+static MeetSlot agRows[MAX_AGENDA_ROWS];
+static int agLayout = -1;  // number of rows the slots are currently sized for
 // Cards
-static lv_obj_t* cardList;
+static lv_obj_t *cardList, *cardMsg;
+static TicketSlot cardRows[MAX_CARD_ROWS];
+static TicketSlot nowTickets[2];
+static lv_obj_t* nowMsg;
 static uint32_t cardsDwellMs = 0;  // how long the cards slide needs to show every page once
 // KPIs
 static lv_obj_t *kpiVal[6], *kpiLbl[6], *kpiSub[6];
@@ -299,25 +310,54 @@ static void setRing(Ring& r, const SprintData& s) {
 
 static Ring nowRing, spRing;
 
-// Ticket row: accent bar, key over title, outlined status pill, points.
-static void ticketRow(lv_obj_t* parent, int x, int y, int w, const Card& c) {
-  lv_color_t col = catColor(c.cat, c.blocked);
-  lv_obj_t* r = panel(parent, x, y, w, 42, 6);
-  rect(r, 8, 10, 3, 22, col);
-  lv_obj_t* key = hudText(r, F_HUD_M, col, c.key.c_str());
-  lv_obj_set_pos(key, 18, 2);
-  lv_obj_t* title = text(r, F_SMALL, c.cat == CAT_DONE ? C_MUTED : C_TEXT, c.title.c_str());
-  lv_obj_set_width(title, w - 170);
-  lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-  lv_obj_set_pos(title, 18, 19);
-  lv_obj_t* pill = plain(r, w - 142, 11, 100, 20);
-  lv_obj_set_style_radius(pill, 10, 0);
-  lv_obj_set_style_border_width(pill, 1, 0);
-  lv_obj_set_style_border_color(pill, col, 0);
-  lv_obj_t* pl = text(pill, F_HUD, col, catName(c.cat, c.blocked));
-  lv_obj_center(pl);
-  lv_obj_t* pts = hudText(r, F_HUD_M, C_MUTED, fmtPts(c.pts).c_str());
-  lv_obj_align(pts, LV_ALIGN_RIGHT_MID, -12, 0);
+// Ticket row: accent bar, key over title, outlined status pill, points. Built hidden; fillTicket shows it.
+static TicketSlot makeTicket(lv_obj_t* parent, int x, int y, int w) {
+  TicketSlot t;
+  t.box = panel(parent, x, y, w, 42, 6);
+  t.bar = rect(t.box, 8, 10, 3, 22, C_LINE);
+  t.key = hudText(t.box, F_HUD_M, C_TEXT, "");
+  lv_obj_set_pos(t.key, 18, 2);
+  t.title = text(t.box, F_SMALL, C_TEXT, "");
+  lv_obj_set_width(t.title, w - 170);
+  lv_label_set_long_mode(t.title, LV_LABEL_LONG_DOT);
+  lv_obj_set_pos(t.title, 18, 19);
+  t.pill = plain(t.box, w - 142, 11, 100, 20);
+  lv_obj_set_style_radius(t.pill, 10, 0);
+  lv_obj_set_style_border_width(t.pill, 1, 0);
+  t.pillLbl = text(t.pill, F_HUD, C_TEXT, "");
+  lv_obj_center(t.pillLbl);
+  t.pts = hudText(t.box, F_HUD_M, C_MUTED, "");
+  lv_obj_align(t.pts, LV_ALIGN_RIGHT_MID, -12, 0);
+  lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN);
+  return t;
+}
+
+static void fillTicket(TicketSlot& t, const Card* c) {
+  if (!c) { lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN); return; }
+  lv_color_t col = catColor(c->cat, c->blocked);
+  lv_obj_set_style_bg_color(t.bar, col, 0);
+  lv_label_set_text(t.key, c->key.c_str());
+  lv_obj_set_style_text_color(t.key, col, 0);
+  lv_label_set_text(t.title, c->title.c_str());
+  lv_obj_set_style_text_color(t.title, c->cat == CAT_DONE ? C_MUTED : C_TEXT, 0);
+  lv_obj_set_style_border_color(t.pill, col, 0);
+  lv_label_set_text(t.pillLbl, catName(c->cat, c->blocked));
+  lv_obj_set_style_text_color(t.pillLbl, col, 0);
+  lv_label_set_text(t.pts, fmtPts(c->pts).c_str());
+  lv_obj_remove_flag(t.box, LV_OBJ_FLAG_HIDDEN);
+}
+
+// One message label per list (errors, "no cards"); hidden when the list has rows.
+static lv_obj_t* makeMsg(lv_obj_t* parent) {
+  lv_obj_t* l = errorText(parent, 6, 6, "");
+  lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN);
+  return l;
+}
+
+static void setMsg(lv_obj_t* l, const char* s) {
+  if (!s) { lv_obj_add_flag(l, LV_OBJ_FLAG_HIDDEN); return; }
+  lv_label_set_text(l, s);
+  lv_obj_remove_flag(l, LV_OBJ_FLAG_HIDDEN);
 }
 
 // ---------- build: header, tab bar, banner (layer_top) ----------
@@ -448,6 +488,8 @@ static void buildNow() {
   makeRing(nowRing, R, 128, 16, 96, 9);
 
   nowRows = plain(s, 6, 176, 468, 90);
+  for (int i = 0; i < 2; i++) nowTickets[i] = makeTicket(nowRows, 0, i * 46, 468);
+  nowMsg = makeMsg(nowRows);
 }
 
 static void buildSprint() {
@@ -498,11 +540,16 @@ static void buildSprint() {
 static void buildAgenda() {
   lv_obj_t* s = screens[PG_AGENDA] = newScreen();
   agList = plain(s, 6, CONTENT_Y, 468, 224);
+  agMsg = makeMsg(agList);
+  agLayout = -1;  // agenda slots are sized on the first render
+  for (MeetSlot& m : agRows) m.box = nullptr;
 }
 
 static void buildCards() {
   lv_obj_t* s = screens[PG_CARDS] = newScreen();
   cardList = plain(s, 6, CONTENT_Y, 468, 224);
+  for (int i = 0; i < MAX_CARD_ROWS; i++) cardRows[i] = makeTicket(cardList, 0, i * 45, 468);
+  cardMsg = makeMsg(cardList);
 }
 
 static void buildKpi() {
@@ -689,68 +736,91 @@ static void renderNow(time_t now) {
   }
   setRing(nowRing, s);
 
-  lv_obj_clean(nowRows);
   const Card* c = currentCard();
   const Card* u = urgentCard(c);
-  if (!s.ok) {
-    errorText(nowRows, 6, 6, ("JIRA: " + s.err).c_str());
-  } else if (!c && !u) {
-    errorText(nowRows, 6, 6, "NO ACTIVE CARDS · PICK ONE FROM THE SPRINT");
+  if (!s.ok || (!c && !u)) {
+    fillTicket(nowTickets[0], nullptr);
+    fillTicket(nowTickets[1], nullptr);
+    setMsg(nowMsg, !s.ok ? ("JIRA: " + s.err).c_str() : "NO ACTIVE CARDS · PICK ONE FROM THE SPRINT");
   } else {
-    int y = 0;
-    if (c) { ticketRow(nowRows, 0, y, 468, *c); y += 46; }
-    if (u) ticketRow(nowRows, 0, y, 468, *u);
+    setMsg(nowMsg, nullptr);
+    fillTicket(nowTickets[0], c ? c : u);
+    fillTicket(nowTickets[1], c ? u : nullptr);
   }
 }
 
-// Agenda: today's meetings as rows (time, title, room or link, state). Up to 5, from the first
-// one that hasn't ended (one finished meeting stays on top for context).
+// Agenda slots for a list of n rows: taller rows when there are 3 or fewer, so long links and
+// locations wrap onto a second line. Rebuilt only when n changes (a meeting ends, new data).
+static void layoutAgenda(int n) {
+  if (n == agLayout) return;
+  for (MeetSlot& m : agRows)
+    if (m.box) { lv_obj_delete(m.box); m.box = nullptr; }
+  agLayout = n;
+  int step = min(74, 224 / max(1, n)), h = step - 4;
+  bool twoLines = step >= 60;
+  for (int i = 0; i < n; i++) {
+    MeetSlot& m = agRows[i];
+    m.box = panel(agList, 0, i * step, 468, h, 6, C_LINE, false, &m.outline);
+    m.bar = rect(m.box, 8, 8, 3, h - 16, C_ICE);
+    m.start = hudText(m.box, F_HUD_M, C_TEXT, "");
+    lv_obj_set_pos(m.start, 18, 2);
+    m.end = hudText(m.box, F_HUD, C_MUTED, "");
+    lv_obj_set_pos(m.end, 18, 21);
+    m.title = text(m.box, F_SMALL, C_TEXT, "");
+    lv_obj_set_width(m.title, 280);
+    lv_label_set_long_mode(m.title, LV_LABEL_LONG_DOT);
+    lv_obj_set_pos(m.title, 80, 1);
+    m.where = hudText(m.box, F_HUD, C_CYAN, "");
+    lv_obj_set_width(m.where, 280);
+    if (twoLines) {
+      lv_label_set_long_mode(m.where, LV_LABEL_LONG_WRAP);  // links wrap onto a second line
+      lv_obj_set_height(m.where, 36);
+    } else {
+      lv_label_set_long_mode(m.where, LV_LABEL_LONG_DOT);
+    }
+    lv_obj_set_pos(m.where, 80, 22);
+    m.pill = plain(m.box, 468 - 96, (h - 20) / 2 - 2, 84, 20);
+    lv_obj_set_style_radius(m.pill, 10, 0);
+    lv_obj_set_style_border_width(m.pill, 1, 0);
+    m.pillLbl = text(m.pill, F_HUD, C_ICE, "");
+    lv_obj_center(m.pillLbl);
+  }
+}
+
+// Agenda: the meetings that haven't ended yet (up to 4): time, title, room or link, state.
 static void renderAgenda(time_t now) {
   if (!agList) return;
-  lv_obj_clean(agList);
   const MeetingData& d = snap.meet;
-  if (!d.configured) { errorText(agList, 6, 6, "CALENDAR NOT SET · ADD AN .ICS URL ON THE SETTINGS PAGE"); return; }
-  if (!d.ok) { errorText(agList, 6, 6, ("CALENDAR: " + d.err).c_str()); return; }
-  if (!d.count) { errorText(agList, 6, 6, "NO MEETINGS TODAY"); return; }
-  // Only meetings that haven't ended: up to 4, taller rows when there are fewer so long
-  // links and locations get a second line.
   int first = 0;
   while (first < d.count && d.m[first].end <= now) first++;
-  int n = min(d.count - first, 4);
-  if (!n) { errorText(agList, 6, 6, "NO MORE MEETINGS TODAY"); return; }
-  int step = min(74, 224 / n);
-  bool twoLines = step >= 60;
+  int n = d.configured && d.ok ? min(d.count - first, MAX_AGENDA_ROWS) : 0;
+  layoutAgenda(n);
+  if (!n) {
+    String err = "CALENDAR: " + d.err;
+    setMsg(agMsg, !d.configured ? "CALENDAR NOT SET · ADD AN .ICS URL ON THE SETTINGS PAGE"
+                  : !d.ok       ? err.c_str()
+                  : d.count     ? "NO MORE MEETINGS TODAY"
+                                : "NO MEETINGS TODAY");
+    return;
+  }
+  setMsg(agMsg, nullptr);
   const Meeting* next = nextMeeting(now);
   for (int row = 0; row < n; row++) {
     const Meeting& m = d.m[first + row];
-    bool past = false, live = m.start <= now;
+    MeetSlot& r = agRows[row];
+    bool live = m.start <= now;
     lv_color_t col = live ? C_RED : &m == next ? C_AMBER : C_ICE;
-    int h = step - 4;
-    lv_obj_t* r = panel(agList, 0, row * step, 468, h, 6, live ? C_RED : C_LINE);
-    rect(r, 8, 8, 3, h - 16, col);
-    lv_obj_set_pos(hudText(r, F_HUD_M, C_TEXT, hhmm(m.start).c_str()), 18, 2);
-    lv_obj_set_pos(hudText(r, F_HUD, C_MUTED, hhmm(m.end).c_str()), 18, 21);
-    lv_obj_t* title = text(r, F_SMALL, C_TEXT, m.title.c_str());
-    lv_obj_set_width(title, 280);
-    lv_label_set_long_mode(title, LV_LABEL_LONG_DOT);
-    lv_obj_set_pos(title, 80, 1);
-    lv_obj_t* where = hudText(r, F_HUD, C_CYAN, m.where.length() ? m.where.c_str() : "-");
-    lv_obj_set_width(where, 280);
-    if (twoLines) {
-      lv_label_set_long_mode(where, LV_LABEL_LONG_WRAP);  // links wrap onto a second line
-      lv_obj_set_height(where, 36);
-    } else {
-      lv_label_set_long_mode(where, LV_LABEL_LONG_DOT);
-    }
-    lv_obj_set_pos(where, 80, 22);
+    lv_obj_set_style_line_color(r.outline, live ? C_RED : C_LINE, 0);
+    lv_obj_set_style_bg_color(r.bar, col, 0);
+    lv_label_set_text(r.start, hhmm(m.start).c_str());
+    lv_label_set_text(r.end, hhmm(m.end).c_str());
+    lv_label_set_text(r.title, m.title.c_str());
+    lv_label_set_text(r.where, m.where.length() ? m.where.c_str() : "-");
     long mins = (m.start - now) / 60;
-    String state = past ? String("DONE") : live ? String("LIVE")
-                 : mins >= 60 ? "IN " + String(mins / 60) + "H" : "IN " + String(max(1L, mins)) + "M";
-    lv_obj_t* pill = plain(r, 468 - 96, (h - 20) / 2 - 2, 84, 20);
-    lv_obj_set_style_radius(pill, 10, 0);
-    lv_obj_set_style_border_width(pill, 1, 0);
-    lv_obj_set_style_border_color(pill, col, 0);
-    lv_obj_center(text(pill, F_HUD, col, state.c_str()));
+    String state = live ? String("LIVE") : mins >= 60 ? "IN " + String(mins / 60) + "H" : "IN " + String(max(1L, mins)) + "M";
+    lv_obj_set_style_border_color(r.pill, col, 0);
+    lv_label_set_text(r.pillLbl, state.c_str());
+    lv_obj_set_style_text_color(r.pillLbl, col, 0);
   }
 }
 
@@ -829,16 +899,16 @@ static void cardTitle() {
 }
 
 static void drawCardPage() {
-  lv_obj_clean(cardList);
   const SprintData& s = snap.sprint;
-  if (!s.count || !cardOrderLen) {
-    errorText(cardList, 6, 6, !s.ok ? ("JIRA: " + s.err).c_str() : s.count ? "ALL CARDS ARE DONE" : "NO CARDS IN THIS SPRINT");
-    cardTitle();
-    return;
-  }
+  bool empty = !s.count || !cardOrderLen;
+  String err = "JIRA: " + s.err;
+  setMsg(cardMsg, !empty ? nullptr : !s.ok ? err.c_str() : s.count ? "ALL CARDS ARE DONE" : "NO CARDS IN THIS SPRINT");
   int first = cardPage * CARDS_PER_PAGE;
-  for (int n = first; n < cardOrderLen && n < first + CARDS_PER_PAGE; n++)
-    ticketRow(cardList, 0, (n - first) * 45, 468, s.cards[cardOrder[n]]);
+  for (int i = 0; i < MAX_CARD_ROWS; i++) {
+    int n = first + i;
+    bool show = !empty && i < CARDS_PER_PAGE && n < cardOrderLen;
+    fillTicket(cardRows[i], show ? &s.cards[cardOrder[n]] : nullptr);
+  }
   cardTitle();
 }
 
@@ -1184,6 +1254,8 @@ void ui_refresh(RefreshKind kind) {
       screens[i] = nullptr;
     }
     agList = nullptr;
+    agLayout = -1;
+    for (MeetSlot& m : agRows) m.box = nullptr;  // deleted with their screen
     dashboardBuilt = false;
   }
   // The UI copy of the data is rebuilt after the fetch; free its strings now as well.
