@@ -10,6 +10,14 @@
 
 static volatile bool refreshNow = true;
 static uint32_t lastFetch = 0, lastKuma = 0;
+static int lastFetchYday = -1;  // local day of the last full fetch: the calendar holds today only
+
+static int localYday() {
+  time_t now = time(nullptr);
+  struct tm lt;
+  localtime_r(&now, &lt);
+  return lt.tm_yday;
+}
 static FetchProgress progress = nullptr;
 void fetch_request_refresh() { refreshNow = true; }
 
@@ -902,6 +910,7 @@ static bool publish(const char* name, T Snapshot::*field, Fn fill, String& err) 
 RefreshKind fetch_due() {
   if (WiFi.status() != WL_CONNECTED || !timeValid()) return REFRESH_NONE;
   if (refreshNow || millis() - lastFetch >= gCfg.refreshMin * 60000UL) return REFRESH_FULL;
+  if (lastFetchYday >= 0 && localYday() != lastFetchYday) return REFRESH_FULL;  // just past midnight
   if (millis() - lastKuma >= gCfg.kumaMin * 60000UL) return REFRESH_KUMA;
   return REFRESH_NONE;
 }
@@ -957,7 +966,10 @@ void fetch_all(FetchProgress p, RefreshKind kind) {
 
   if (!full) report(STEP_CALENDAR, STEP_SKIP, "unchanged");
   else if (settings_mock()) report(STEP_CALENDAR, STEP_OK, "demo data");
-  if (full) lastFetch = millis();
+  if (full) {
+    lastFetch = millis();
+    lastFetchYday = localYday();
+  }
   lastKuma = millis();
   progress = nullptr;
 }
