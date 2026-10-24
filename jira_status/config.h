@@ -22,11 +22,9 @@
 // the same path on this host over plain http ("" turns this off).
 #define ICS_LAN_HOST "10.20.36.36"
 
-// Memory guards (bytes of the largest free block). One HTTPS connection needs roughly 35-45 KB in
-// one piece. Kuma checks run in place while at least KUMA_INPLACE_BLOCK is free; a refresh that
-// still finds less than MIN_TLS_BLOCK after freeing the dashboard restarts the board instead.
-#define KUMA_INPLACE_BLOCK 50000
-#define MIN_TLS_BLOCK 38000
+// Kuma checks run with the dashboard on screen while at least this much heap is free (bytes);
+// otherwise the dashboard is freed first. A fetch that runs out of TLS memory restarts the board.
+#define KUMA_INPLACE_HEAP 60000
 // Daily restart for a clean heap (local hour; -1 turns it off).
 #define NIGHTLY_RESTART_HOUR 4
 

@@ -1279,9 +1279,12 @@ void ui_tick() {
 }
 
 // Restarting is the recovery for a fragmented heap: everything is fetched again on boot.
+static int refreshesDone = 0;
+
 static void restartFor(const char* why) {
-  // Not in the first 10 minutes after boot: a cause a restart can't fix would loop forever.
-  if (millis() < 600000UL) { LOG("restart skipped (just booted): %s", why); return; }
+  // Not when the first refresh after boot fails: then a restart doesn't help (server down,
+  // network blocked) and would loop. Later failures come from a fragmented heap, which it fixes.
+  if (!refreshesDone) { LOG("restart skipped (first refresh after boot): %s", why); return; }
   LOG("restart: %s", why);
   Serial.flush();
   delay(200);
@@ -1311,7 +1314,7 @@ static void refreshKumaInPlace() {
 }
 
 void ui_refresh(RefreshKind kind) {
-  if (kind == REFRESH_KUMA && dashboardBuilt && ESP.getMaxAllocHeap() >= KUMA_INPLACE_BLOCK) {
+  if (kind == REFRESH_KUMA && dashboardBuilt && ESP.getFreeHeap() >= KUMA_INPLACE_HEAP) {
     refreshKumaInPlace();
     return;
   }
@@ -1338,7 +1341,6 @@ void ui_refresh(RefreshKind kind) {
   snap = Snapshot();
   lv_refr_now(nullptr);
   LOG("refresh: dashboard freed");
-  if (ESP.getMaxAllocHeap() < MIN_TLS_BLOCK) restartFor("heap too fragmented for HTTPS");
 
   fetch_all(onProgress, kind);
   model_lock();
@@ -1363,5 +1365,6 @@ void ui_refresh(RefreshKind kind) {
   hdPhraseText = "";
   lastClock = 0;
   showPage(PG_NOW, false);
+  refreshesDone++;
   LOG("refresh: done, loop stack left %u bytes", (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 }
