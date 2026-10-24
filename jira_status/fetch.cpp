@@ -425,11 +425,22 @@ class ChunkedStream : public Stream {
       left_ = strtol(size.c_str(), nullptr, 16);
       if (left_ == 0) { done_ = true; return -1; }
     }
-    char c;
-    s_->setTimeout(getTimeout());
-    if (s_->readBytes(&c, 1) != 1) { done_ = true; return -1; }
-    if (chunked_) left_--;
-    return (uint8_t)c;
+    // Wait for the byte ourselves: the TLS client's readBytes() gives up as soon as the next TLS
+    // record hasn't arrived yet, which cut the calendar off after its first 16 KB record.
+    uint32_t t0 = millis();
+    for (;;) {
+      int c = s_->read();
+      if (c >= 0) {
+        if (chunked_) left_--;
+        return c;
+      }
+      Client* cl = static_cast<Client*>(s_);
+      if (!cl->connected() && !cl->available()) break;
+      if (millis() - t0 >= getTimeout()) break;
+      delay(2);
+    }
+    done_ = true;
+    return -1;
   }
   int peek() override { return -1; }
   int available() override { return done_ ? 0 : 1; }
