@@ -1084,14 +1084,42 @@ static void renderAll(time_t now) {
 }
 
 // ---------- presence status (full screen, alternates with HEALTH) ----------
-// Built once at boot and kept (like the loading screen), so a status change only restyles it.
+// Built once at boot and kept (like the loading screen); a status change only shows another group
+// and restyles. One 40 ms timer moves the parts while the status screen is on: each status changes
+// a few small objects per frame (lines, dots), so only small areas are redrawn on the ILI9488.
+//   WFH         radar sweep with fading trail and blips, signal bars, "UPLINK ACTIVE"
+//   ON THE WAY  route from home to HQ, progress (time since set -> ETA), pulsing dot, ETA bar
+//   LEFT        shutdown: rings collapse into the core, then standby blink with a passing scan line
+//   AWAY        lockdown: rotating hexagon shield, breathing core, moving hazard stripes
+// Every status change starts with the title typing itself out and a short flicker.
 
 enum { ST_NONE, ST_WFH, ST_WAY, ST_LEFT, ST_AWAY };
 static const int PG_STATUS = PG_COUNT;  // page index of the status screen
 static int curStatus = ST_NONE;
-static lv_obj_t *stScreen, *stRingA, *stCore, *stIcon, *stPulse, *stTitle, *stEta, *stSub, *stNote, *stRoad,
-    *stCar, *stSince;
 static String stSubText;
+static uint32_t stShownAt = 0;  // when the current status was first drawn (typing, shutdown)
+
+static lv_obj_t *stScreen, *stBody, *stTitle, *stSub, *stExtra, *stNote, *stSince;
+static lv_obj_t* stGroup[5];  // per-status parts (index = ST_*)
+static String stTitleText;
+// WFH
+constexpr int BEAM_TRAIL = 6, BLIPS = 4;
+static lv_obj_t *rdBeam[BEAM_TRAIL], *rdBlip[BLIPS], *rdBar[5], *rdUplink;
+static lv_point_precise_t rdBeamPts[BEAM_TRAIL][2];
+static const float blipAng[BLIPS] = {0.8f, 2.6f, 4.1f, 5.3f};
+static const int blipR[BLIPS] = {40, 60, 30, 55};
+// ON THE WAY
+constexpr int ROUTE_N = 31;
+static lv_point_precise_t routePts[ROUTE_N];
+static lv_obj_t *nvDone, *nvHalo, *nvDot, *nvHq, *nvHqLbl, *nvEta, *nvBar, *nvEtaLbl;
+static lv_obj_t* nvHqLine;
+// LEFT
+static lv_obj_t *lfRingA, *lfRingB, *lfCore, *lfScan, *lfOuter;
+// AWAY
+static lv_obj_t *awSeg[3], *awInner, *awCore, *awStripes;
+static lv_point_precise_t awSegPts[3][2], awInnerPts[7];
+
+static const int SCX = 99, SCY = 158;  // emblem center
 
 // "09:40" as a time: the first one at or after `from` minus 3 h (so an ETA just passed stays today).
 static time_t clockTime(const String& hhmmS, time_t from) {
@@ -1131,66 +1159,250 @@ static int effectiveStatus(time_t now) {
   return k;
 }
 
-static void opaCb(void* o, int32_t v) { lv_obj_set_style_opa((lv_obj_t*)o, (lv_opa_t)v, 0); }
-static void xCb(void* o, int32_t v) { lv_obj_set_x((lv_obj_t*)o, v); }
-// A ring growing out of the emblem and fading (WFH "signal").
-static void waveCb(void* o, int32_t v) {
-  lv_obj_t* p = (lv_obj_t*)o;
-  lv_obj_set_size(p, v, v);
-  lv_obj_set_pos(p, 99 - v / 2, 155 - v / 2);
-  lv_obj_set_style_border_opa(p, (lv_opa_t)(255 - (v - 40) * 255 / 140), 0);
+// ----- small builders for the status parts -----
+
+static lv_obj_t* dot(lv_obj_t* parent, int cx, int cy, int r, lv_color_t c) {
+  return rect(parent, cx - r, cy - r, 2 * r, 2 * r, c, LV_RADIUS_CIRCLE);
 }
 
-static void animLoop(lv_obj_t* o, lv_anim_exec_xcb_t cb, int32_t from, int32_t to, uint32_t ms, bool back) {
-  lv_anim_t a;
-  lv_anim_init(&a);
-  lv_anim_set_var(&a, o);
-  lv_anim_set_exec_cb(&a, cb);
-  lv_anim_set_values(&a, from, to);
-  lv_anim_set_duration(&a, ms);
-  if (back) lv_anim_set_playback_duration(&a, ms);
-  lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
-  lv_anim_set_path_cb(&a, back ? lv_anim_path_ease_in_out : lv_anim_path_linear);
-  lv_anim_start(&a);
+// Sets a round part's radius and centers it on (cx, cy).
+static void placeDot(lv_obj_t* d, int cx, int cy, int r) {
+  lv_obj_set_size(d, 2 * r, 2 * r);
+  lv_obj_set_pos(d, cx - r, cy - r);
+}
+
+static lv_point_precise_t P(float x, float y) { return {(lv_value_precise_t)x, (lv_value_precise_t)y}; }
+
+// A line whose points live in the caller's static array (updated in place each frame).
+static lv_obj_t* liveLine(lv_obj_t* parent, lv_point_precise_t* pts, int n, lv_color_t c, int w) {
+  lv_obj_t* l = lv_line_create(parent);
+  lv_line_set_points(l, pts, n);
+  lv_obj_set_style_line_color(l, c, 0);
+  lv_obj_set_style_line_width(l, w, 0);
+  lv_obj_set_style_line_rounded(l, true, 0);
+  lv_obj_set_pos(l, 0, 0);
+  return l;
+}
+
+static lv_obj_t* group(lv_obj_t* parent) {
+  lv_obj_t* g = plain(parent, 0, 0, SCREEN_W, SCREEN_H);
+  lv_obj_add_flag(g, LV_OBJ_FLAG_HIDDEN);
+  return g;
+}
+
+static void buildRadar(lv_obj_t* g) {
+  arcRing(g, SCX - 75, SCY - 75, 150, 2, C_DIM, true);
+  arcRing(g, SCX - 50, SCY - 50, 100, 1, C_DIM, true);
+  arcRing(g, SCX - 25, SCY - 25, 50, 1, C_DIM, true);
+  rect(g, SCX - 75, SCY, 150, 1, C_DIM);
+  rect(g, SCX, SCY - 75, 1, 150, C_DIM);
+  for (int i = 0; i < BLIPS; i++) {
+    rdBlip[i] = dot(g, SCX + blipR[i] * cosf(blipAng[i]), SCY + blipR[i] * sinf(blipAng[i]), 4, C_LIME);
+    lv_obj_set_style_opa(rdBlip[i], LV_OPA_TRANSP, 0);
+  }
+  for (int i = BEAM_TRAIL - 1; i >= 0; i--) {
+    rdBeamPts[i][0] = P(SCX, SCY);
+    rdBeamPts[i][1] = P(SCX + 75, SCY);
+    rdBeam[i] = liveLine(g, rdBeamPts[i], 2, C_CYAN, 2);
+    lv_obj_set_style_line_opa(rdBeam[i], 255 - i * 255 / BEAM_TRAIL, 0);
+  }
+  dot(g, SCX, SCY, 6, C_CYAN);
+  for (int i = 0; i < 5; i++) rdBar[i] = rect(g, 196 + i * 12, 200 - (8 + i * 7), 8, 8 + i * 7, C_DIM);
+  rdUplink = hudText(g, F_HUD, C_LIME, "UPLINK ACTIVE");
+  lv_obj_set_pos(rdUplink, 262, 186);
+}
+
+static void buildNav(lv_obj_t* g) {
+  for (int i = 0; i < ROUTE_N; i++) {
+    float u = (float)i / (ROUTE_N - 1);
+    routePts[i] = P(30 + u * 410, 268 - 40 * sinf(u * PI) + 10 * sinf(u * 9));
+  }
+  lv_obj_t* road = liveLine(g, routePts, ROUTE_N, C_LINE, 2);
+  lv_obj_set_style_line_dash_width(road, 8, 0);
+  lv_obj_set_style_line_dash_gap(road, 6, 0);
+  lv_obj_set_style_line_rounded(road, false, 0);
+  nvDone = liveLine(g, routePts, 1, C_AMBER, 3);
+  dot(g, 30, 268, 4, C_MUTED);
+  lv_obj_t* home = hudText(g, F_HUD, C_MUTED, "HOME");
+  lv_obj_set_pos(home, 14, 280);
+  nvHq = panel(g, 426, 250, 30, 26, 5, C_CYAN, false, &nvHqLine);
+  lv_obj_set_style_line_width(nvHqLine, 2, 0);
+  nvHqLbl = hudText(nvHq, F_HUD, C_CYAN, "HQ");
+  lv_obj_align(nvHqLbl, LV_ALIGN_CENTER, 0, 0);
+  nvHalo = dot(g, 30, 268, 11, C_AMBER);
+  lv_obj_set_style_bg_opa(nvHalo, LV_OPA_30, 0);
+  nvDot = dot(g, 30, 268, 5, C_AMBER);
+  nvEta = text(g, F_CLOCK, C_TEXT, "");
+  lv_obj_set_pos(nvEta, 24, 94);
+  rect(g, 200, 124, 250, 4, C_DIM);
+  nvBar = rect(g, 200, 124, 1, 4, C_AMBER);
+  nvEtaLbl = hudText(g, F_HUD, C_MUTED, "");
+  lv_obj_align(nvEtaLbl, LV_ALIGN_TOP_RIGHT, -30, 134);
+}
+
+static void buildShutdown(lv_obj_t* g) {
+  lfOuter = arcRing(g, SCX - 70, SCY - 70, 140, 1, C_DIM, true);
+  lfRingA = arcRing(g, SCX - 62, SCY - 62, 124, 6, C_VIOLET, false);
+  lv_arc_set_angles(lfRingA, 0, 250);
+  lfRingB = arcRing(g, SCX - 44, SCY - 44, 88, 3, C_ICE, false);
+  lv_arc_set_angles(lfRingB, 0, 115);
+  lfCore = dot(g, SCX, SCY, 18, C_VIOLET);
+  lfScan = rect(g, 10, 60, 460, 1, C_VIOLET);
+  lv_obj_set_style_bg_opa(lfScan, LV_OPA_40, 0);
+}
+
+static void buildLockdown(lv_obj_t* g) {
+  for (int i = 0; i < 3; i++) awSeg[i] = liveLine(g, awSegPts[i], 2, C_RED, 4);
+  awInner = liveLine(g, awInnerPts, 7, C_RED, 2);
+  lv_obj_set_style_line_opa(awInner, LV_OPA_50, 0);
+  awCore = dot(g, SCX, SCY, 20, C_RED);
+  rect(awCore, 11, 18, 18, 4, C_BG);  // "no entry" bar
+  // Hazard tape: slanted stripes in a clipped strip, slid left to right.
+  lv_obj_t* strip = plain(g, 196, 250, 264, 16);
+  awStripes = plain(strip, -20, 0, 304, 16);
+  static lv_point_precise_t stripe[2] = {{0, 16}, {10, 0}};
+  for (int x = 0; x < 304; x += 20) {
+    lv_obj_t* l = lv_line_create(awStripes);
+    lv_line_set_points(l, stripe, 2);  // all stripes share the same two points
+    lv_obj_set_style_line_color(l, C_AMBER, 0);
+    lv_obj_set_style_line_width(l, 8, 0);
+    lv_obj_set_pos(l, x, 0);
+  }
+}
+
+// ----- per-frame animation -----
+
+static float stPhase() { return (millis() - stShownAt) / 1000.0f; }
+
+// Title typed out letter by letter with a blinking cursor, then shown as is.
+static void typeTitle(const String& full, float t) {
+  int n = min((int)full.length(), (int)(t * 18));
+  String s = full.substring(0, n);
+  if (t * 18 < full.length() + 6 && ((int)(t * 3)) % 2) s += "_";
+  if (s == stTitleText) return;
+  stTitleText = s;
+  lv_label_set_text(stTitle, s.c_str());
+}
+
+static float wayProgress(time_t now) {
+  const StatusData& s = snap.status;
+  time_t since = s.since ? s.since : now;
+  time_t eta = s.eta.length() ? clockTime(s.eta, since) : 0;
+  if (!eta || eta <= since) return 0.35f + fmodf(stPhase(), 14) / 14 * 0.6f;  // no ETA: keep driving
+  float p = (float)(now - since) / (float)(eta - since);
+  return p < 0 ? 0 : p > 1 ? 1 : p;
+}
+
+static void frameRadar(float t) {
+  float a = t * 2.2f;
+  for (int i = 0; i < BEAM_TRAIL; i++) {
+    float aa = a - i * 0.09f;
+    rdBeamPts[i][1] = P(SCX + 75 * cosf(aa), SCY + 75 * sinf(aa));
+    lv_line_set_points(rdBeam[i], rdBeamPts[i], 2);
+  }
+  for (int i = 0; i < BLIPS; i++) {
+    float d = fmodf(fmodf(a - blipAng[i], 2 * PI) + 2 * PI, 2 * PI);
+    int o = d < 3 ? (int)(255 * (1 - d / 3)) : 0;
+    lv_obj_set_style_opa(rdBlip[i], o, 0);
+  }
+  int lit = ((int)(t * 4)) % 6;
+  for (int i = 0; i < 5; i++) lv_obj_set_style_bg_color(rdBar[i], i < lit ? C_CYAN : C_DIM, 0);
+  if (((int)(t * 2)) % 2) lv_obj_remove_flag(rdUplink, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(rdUplink, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void frameNav(float t, time_t now) {
+  float p = wayProgress(now);
+  int k = min(ROUTE_N - 1, (int)(p * (ROUTE_N - 1)));
+  lv_line_set_points(nvDone, routePts, k + 1);
+  int x = (int)routePts[k].x, y = (int)routePts[k].y;
+  placeDot(nvDot, x, y, 5);
+  placeDot(nvHalo, x, y, 9 + (int)(4 * fabsf(sinf(t * 4))));
+  lv_obj_set_width(nvBar, max(1, (int)(250 * p)));
+  bool flash = p >= 0.99f && ((int)(t * 4)) % 2;
+  lv_obj_set_style_line_color(nvHqLine, flash ? C_LIME : C_CYAN, 0);
+  lv_obj_set_style_text_color(nvHqLbl, flash ? C_LIME : C_CYAN, 0);
+}
+
+static void frameShutdown(float t) {
+  float c = min(1.0f, t / 1.6f);
+  if (c < 1) {
+    int ra = 4 + (int)(58 * (1 - c)), rb = 3 + (int)(41 * (1 - c));
+    placeDot(lfRingA, SCX, SCY, ra);
+    lv_arc_set_rotation(lfRingA, (int)(t * 170) % 360);
+    placeDot(lfRingB, SCX, SCY, rb);
+    lv_arc_set_rotation(lfRingB, 360 - (int)(t * 230) % 360);
+    placeDot(lfCore, SCX, SCY, 4 + (int)(14 * (1 - c)));
+    typeTitle("POWERING DOWN...", t);
+    return;
+  }
+  if (!lv_obj_has_flag(lfRingA, LV_OBJ_FLAG_HIDDEN)) {  // shutdown finished: standby
+    lv_obj_add_flag(lfRingA, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lfRingB, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(lfOuter, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(lfScan, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(stSub, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
+  }
+  typeTitle("LEFT THE OFFICE", t - 1.6f);
+  lv_obj_set_style_opa(lfCore, 64 + (int)(191 * fabsf(sinf(t * 1.4f))), 0);
+  lv_obj_set_y(lfScan, 60 + (int)(t * 60) % 240);
+}
+
+static void frameLockdown(float t) {
+  float ro = t * 0.8f, ri = -t * 1.2f;
+  for (int i = 0; i < 3; i++) {
+    float a = ro + i * 2 * PI / 3, b = a + PI / 3;
+    awSegPts[i][0] = P(SCX + 72 * cosf(a), SCY + 72 * sinf(a));
+    awSegPts[i][1] = P(SCX + 72 * cosf(b), SCY + 72 * sinf(b));
+    lv_line_set_points(awSeg[i], awSegPts[i], 2);
+  }
+  for (int i = 0; i < 7; i++) {
+    float a = ri + i * PI / 3;
+    awInnerPts[i] = P(SCX + 56 * cosf(a), SCY + 56 * sinf(a));
+  }
+  lv_line_set_points(awInner, awInnerPts, 7);
+  lv_obj_set_style_opa(awCore, 100 + (int)(155 * fabsf(sinf(t * 2.6f))), 0);
+  lv_obj_set_x(awStripes, -20 + (int)(t * 30) % 20);
+  if (((int)(t * 1.5f)) % 2) lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
+}
+
+static void statusFrame(lv_timer_t*) {
+  if (curStatus == ST_NONE || lv_screen_active() != stScreen) return;
+  float t = stPhase();
+  time_t now = time(nullptr);
+  // Boot flicker for the first third of a second.
+  lv_obj_set_style_opa(stBody, t < 0.35f && ((int)(t * 30)) % 2 ? LV_OPA_40 : LV_OPA_COVER, 0);
+  static const char* titles[] = {"", "WORKING FROM HOME", "ON MY WAY", "", "NOT AVAILABLE"};
+  switch (curStatus) {
+    case ST_WFH: typeTitle(titles[ST_WFH], t); frameRadar(t); break;
+    case ST_WAY: typeTitle(titles[ST_WAY], t); frameNav(t, now); break;
+    case ST_LEFT: frameShutdown(t); break;
+    default: typeTitle(titles[ST_AWAY], t); frameLockdown(t); break;
+  }
 }
 
 static void buildStatus() {
   lv_obj_t* s = stScreen = newScreen();
   panel(s, 4, 40, 472, 276, 10, C_LINE, true);
-  // Emblem centered at (99, 155): signal wave, track, two counter-rotating rings, core, icon.
-  stPulse = plain(s, 79, 135, 40, 40);
-  lv_obj_set_style_radius(stPulse, LV_RADIUS_CIRCLE, 0);
-  lv_obj_set_style_border_width(stPulse, 2, 0);
-  arcRing(s, 24, 80, 150, 3, C_DIM, true);
-  stRingA = arcRing(s, 37, 93, 124, 8, C_CYAN, false);
-  lv_arc_set_angles(stRingA, 0, 250);
-  lv_obj_t* ringB = arcRing(s, 52, 108, 94, 4, C_ICE, false);
-  lv_arc_set_angles(ringB, 0, 110);
-  spin(stRingA, 3600, false);
-  spin(ringB, 2400, true);
-  stCore = rect(s, 69, 125, 60, 60, C_CYAN, LV_RADIUS_CIRCLE);
-  lv_obj_set_style_bg_opa(stCore, LV_OPA_30, 0);
-  stIcon = text(s, &lv_font_montserrat_28, C_TEXT, "");
-
-  stTitle = hudText(s, F_HUD_L, C_CYAN, "");
+  stBody = plain(s, 0, 0, SCREEN_W, SCREEN_H);
+  stGroup[ST_NONE] = nullptr;
+  buildRadar(stGroup[ST_WFH] = group(stBody));
+  buildNav(stGroup[ST_WAY] = group(stBody));
+  buildShutdown(stGroup[ST_LEFT] = group(stBody));
+  buildLockdown(stGroup[ST_AWAY] = group(stBody));
+  stTitle = hudText(stBody, F_HUD_L, C_CYAN, "");
   lv_obj_set_style_text_letter_space(stTitle, 3, 0);
-  lv_obj_set_pos(stTitle, 196, 66);
-  stEta = text(s, F_CLOCK, C_TEXT, "");
-  lv_obj_set_pos(stEta, 196, 96);
-  stSub = hudText(s, F_HUD_M, C_ICE, "");
+  stSub = hudText(stBody, F_HUD_M, C_ICE, "");
   lv_obj_set_width(stSub, 270);
   lv_label_set_long_mode(stSub, LV_LABEL_LONG_WRAP);
-  stNote = text(s, F_BODY, C_TEXT, "");
+  stExtra = hudText(stBody, F_HUD, C_MUTED, "");
+  stNote = text(stBody, F_BODY, C_TEXT, "");
   lv_obj_set_width(stNote, 270);
   lv_label_set_long_mode(stNote, LV_LABEL_LONG_WRAP);
-  // Road for ON THE WAY: a marker drives toward the office.
-  stRoad = plain(s, 24, 256, 432, 24);
-  rect(stRoad, 0, 11, 400, 2, C_DIM);
-  for (int x = 8; x < 400; x += 24) rect(stRoad, x, 11, 10, 2, C_LINE);
-  lv_obj_set_pos(text(stRoad, &lv_font_montserrat_20, C_LIME, LV_SYMBOL_HOME), 408, 0);
-  stCar = text(stRoad, &lv_font_montserrat_20, C_AMBER, LV_SYMBOL_GPS);
-  stSince = hudText(s, F_HUD, C_MUTED, "");
-  lv_obj_align(stSince, LV_ALIGN_BOTTOM_RIGHT, -16, -10);
+  stSince = hudText(stBody, F_HUD, C_MUTED, "");
+  lv_timer_create(statusFrame, 40, nullptr);
 }
 
 // Text that changes with the clock (the ETA countdown); relabels only when the wording changes.
@@ -1218,55 +1430,69 @@ static void renderStatusTime(time_t now) {
   lv_label_set_text(stSub, sub.c_str());
 }
 
-// Restyles the status screen for curStatus and starts its animation.
+// Shows the parts of curStatus, places the texts and restarts the intro (typing, flicker, shutdown).
 static void renderStatus(time_t now) {
-  const StatusData& s = snap.status;
-  lv_anim_delete(stPulse, nullptr);
-  lv_anim_delete(stCar, nullptr);
-  lv_anim_delete(stCore, nullptr);
-  lv_obj_add_flag(stPulse, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_add_flag(stRoad, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_set_style_opa(stCore, LV_OPA_COVER, 0);
-  stSubText = "";
+  for (int i = ST_WFH; i <= ST_AWAY; i++) lv_obj_add_flag(stGroup[i], LV_OBJ_FLAG_HIDDEN);
+  stSubText = stTitleText = "";
+  stShownAt = millis();
   if (curStatus == ST_NONE) return;
-  static const char* titles[] = {"", "WORKING FROM HOME", "ON MY WAY", "LEFT THE OFFICE", "NOT AVAILABLE"};
-  static const char* icons[] = {"", LV_SYMBOL_HOME, LV_SYMBOL_GPS, LV_SYMBOL_LEFT, LV_SYMBOL_CLOSE};
-  lv_color_t cols[] = {C_CYAN, C_CYAN, C_AMBER, C_VIOLET, C_RED};
-  lv_color_t c = cols[curStatus];
-  lv_obj_set_style_arc_color(stRingA, c, LV_PART_INDICATOR);
-  lv_obj_set_style_bg_color(stCore, c, 0);
-  lv_obj_set_style_border_color(stPulse, c, 0);
-  lv_obj_set_style_text_color(stTitle, c, 0);
-  lv_label_set_text(stTitle, titles[curStatus]);
-  lv_label_set_text(stIcon, icons[curStatus]);
-  lv_obj_align_to(stIcon, stCore, LV_ALIGN_CENTER, 0, 0);
+  const StatusData& s = snap.status;
   time_t since = s.since ? s.since : now;
   time_t eta = s.eta.length() ? clockTime(s.eta, since) : 0;
-  // Big time: the ETA when on the way, the "back" time otherwise.
-  lv_label_set_text(stEta, eta ? hhmm(eta).c_str() : "");
-  int y = eta ? 156 : 104;
-  lv_obj_set_pos(stSub, 196, y);
-  lv_obj_set_pos(stNote, 196, y + 46);
+  lv_color_t cols[] = {C_CYAN, C_CYAN, C_AMBER, C_VIOLET, C_RED};
+  lv_obj_remove_flag(stGroup[curStatus], LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_style_text_color(stTitle, cols[curStatus], 0);
+  lv_label_set_text(stTitle, "");
   lv_label_set_text(stNote, s.note.c_str());
   lv_label_set_text(stSince, ("SINCE " + hhmm(since)).c_str());
   lv_obj_align(stSince, LV_ALIGN_BOTTOM_RIGHT, -16, -10);
+  lv_obj_remove_flag(stSub, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_style_text_color(stExtra, C_MUTED, 0);
+  lv_label_set_text(stExtra, "");
+  int textX = 196;
   switch (curStatus) {
-    case ST_WFH:  // a signal going out from home
-      lv_obj_remove_flag(stPulse, LV_OBJ_FLAG_HIDDEN);
-      animLoop(stPulse, waveCb, 40, 180, 2200, false);
+    case ST_WFH:
+      lv_obj_set_pos(stSub, 196, 108);
+      lv_obj_set_pos(stNote, 196, 214);
       break;
-    case ST_WAY:  // driving toward the office
-      lv_obj_remove_flag(stRoad, LV_OBJ_FLAG_HIDDEN);
-      animLoop(stCar, xCb, 0, 380, 6000, false);
+    case ST_WAY:
+      textX = 24;
+      lv_label_set_text(nvEta, eta ? hhmm(eta).c_str() : "--:--");
+      lv_label_set_text(nvEtaLbl, eta ? ("ETA " + hhmm(eta)).c_str() : "NO ETA");
+      lv_obj_set_pos(stSub, 200, 96);
+      lv_obj_set_width(stSub, 250);
+      lv_obj_set_pos(stNote, 200, 160);
       break;
-    case ST_LEFT:  // fading out
-      animLoop(stCore, opaCb, LV_OPA_COVER, LV_OPA_20, 1800, true);
+    case ST_LEFT:
+      // Shutdown first: rings visible, texts appear when it ends (frameShutdown).
+      lv_obj_remove_flag(lfRingA, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(lfRingB, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(lfOuter, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(lfScan, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_style_opa(lfCore, LV_OPA_COVER, 0);
+      placeDot(lfRingA, SCX, SCY, 62);
+      placeDot(lfRingB, SCX, SCY, 44);
+      placeDot(lfCore, SCX, SCY, 18);
+      lv_obj_add_flag(stSub, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
+      lv_label_set_text(stExtra, "STANDBY");
+      lv_obj_set_pos(stSub, 196, 108);
+      lv_obj_set_pos(stExtra, 196, 136);
+      lv_obj_set_pos(stNote, 196, 164);
       break;
-    default:  // slow red breathing
-      animLoop(stCore, opaCb, LV_OPA_COVER, LV_OPA_40, 1200, true);
+    default:
+      lv_label_set_text(stExtra, "DO NOT DISTURB");
+      lv_obj_set_style_text_color(stExtra, C_RED, 0);
+      lv_obj_set_pos(stSub, 196, 108);
+      lv_obj_set_pos(stExtra, 196, 136);
+      lv_obj_set_pos(stNote, 196, 164);
       break;
   }
+  if (curStatus != ST_WAY) lv_obj_set_width(stSub, 270);
+  lv_obj_set_pos(stTitle, textX, 62);
   renderStatusTime(now);
+  statusFrame(nullptr);
 }
 
 // ---------- alerts: meeting soon / meeting live / outage ----------
