@@ -31,18 +31,24 @@ static uint32_t tick() { return millis(); }
 static void lvLog(lv_log_level_t level, const char* msg) { Serial.print("[lvgl] "); Serial.print(msg); }
 
 // Saved normal WiFi (from the setup portal). Returns true when connected.
+// The saved WiFi is tried twice for 20 s each: a router that is slow to answer (or still booting
+// after a power cut) used to send the board to the setup hotspot, which looked like it had
+// forgotten the password. The saved credentials are never erased here.
 static bool tryNormal(WiFiManager& wm) {
   if (!wm.getWiFiIsSaved()) return false;
-  ui_boot("Connecting to WiFi", wm.getWiFiSSID(true));
-  LOG("normal wifi: %s", wm.getWiFiSSID(true).c_str());
+  String ssid = wm.getWiFiSSID(true);
   WiFi.mode(WIFI_STA);
-  WiFi.begin();
-  uint32_t until = millis() + 15000;
-  while (WiFi.status() != WL_CONNECTED && millis() < until) { lv_timer_handler(); delay(100); }
-  if (WiFi.status() == WL_CONNECTED) return true;
-  LOG("normal wifi failed");
-  WiFi.disconnect(false, false);  // keep the saved credentials
-  delay(200);
+  for (int attempt = 1; attempt <= 2; attempt++) {
+    ui_boot("Connecting to WiFi", ssid + (attempt > 1 ? " (retry)" : ""));
+    LOG("normal wifi: %s, attempt %d", ssid.c_str(), attempt);
+    WiFi.begin();
+    uint32_t until = millis() + 20000;
+    while (WiFi.status() != WL_CONNECTED && millis() < until) { lv_timer_handler(); delay(100); }
+    if (WiFi.status() == WL_CONNECTED) return true;
+    LOG("normal wifi failed (status %d)", (int)WiFi.status());
+    WiFi.disconnect(false, false);  // keep the saved credentials
+    delay(500);
+  }
   return false;
 }
 
@@ -51,10 +57,6 @@ static bool tryEnterprise() {
   if (gCfg.entSsid.isEmpty() || gCfg.entUser.isEmpty()) return false;
   ui_boot("Connecting to company WiFi", gCfg.entSsid);
   LOG("enterprise wifi: %s as %s (CA %s)", gCfg.entSsid.c_str(), gCfg.entUser.c_str(), gCfg.entCa.length() ? "set" : "none");
-  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
-    // Reason codes: 2 AUTH_EXPIRE, 15 4WAY_HANDSHAKE_TIMEOUT, 23 802_1X_AUTH_FAILED, 201 NO_AP_FOUND, 202 AUTH_FAIL
-    LOG("wifi disconnected, reason %d", info.wifi_sta_disconnected.reason);
-  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   WiFi.mode(WIFI_STA);
   WiFi.persistent(false);  // don't overwrite the saved normal WiFi with the company SSID
   const char* identity = gCfg.entIdentity.length() ? gCfg.entIdentity.c_str() : gCfg.entUser.c_str();
@@ -151,12 +153,19 @@ void setup() {
 
   ui_boot("Connecting to WiFi", "");
   WiFi.setHostname(HOSTNAME);
+  WiFi.onEvent([](WiFiEvent_t, WiFiEventInfo_t info) {
+    // Reason codes: 2 AUTH_EXPIRE, 15 4WAY_HANDSHAKE_TIMEOUT, 23 802_1X_AUTH_FAILED, 201 NO_AP_FOUND, 202 AUTH_FAIL
+    LOG("wifi disconnected, reason %d", info.wifi_sta_disconnected.reason);
+  }, ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
   WiFiManager wm;
   // Order: 1) saved normal WiFi  2) company WiFi (PEAP)  3) own hotspot with the setup portal.
   bool online = tryNormal(wm) || tryEnterprise();
 
   if (!online) {
-    wm.setConfigPortalTimeout(300);
+    // With a saved network the hotspot stays up 3 min, then the board restarts and tries it again,
+    // so a router that was down comes back without anyone touching the board.
+    bool hasSaved = wm.getWiFiIsSaved();
+    wm.setConfigPortalTimeout(hasSaved ? 180 : 300);
     // Company WiFi fields in the portal: pick the company network, leave its normal password
     // empty and fill these; the board saves them and restarts.
     WiFiManagerParameter pHead("<p><b>Company WiFi (WPA2/WPA3-Enterprise, PEAP)</b><br>"
@@ -169,7 +178,9 @@ void setup() {
     static bool portalSaved = false;
     wm.setBreakAfterConfig(true);  // run the save callback even when the normal connect fails
     wm.setSaveConfigCallback([] { portalSaved = true; });
-    ui_boot("WiFi setup", "Join the WiFi \"" WIFI_SETUP_AP "\" on your phone\nand open http://192.168.4.1");
+    String hint = "Join the WiFi \"" WIFI_SETUP_AP "\" on your phone\nand open http://192.168.4.1";
+    if (hasSaved) hint = "\"" + wm.getWiFiSSID(true) + "\" not reachable, retrying in 3 min.\n" + hint + " to change it";
+    ui_boot("WiFi setup", hint);
     LOG("no wifi, starting setup hotspot %s", WIFI_SETUP_AP);
     online = wm.startConfigPortal(WIFI_SETUP_AP);
 
