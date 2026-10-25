@@ -9,7 +9,7 @@
 #include <algorithm>
 
 static volatile bool refreshNow = true;
-static uint32_t lastFetch = 0, lastKuma = 0;
+static uint32_t lastFetch = 0, lastKuma = 0, lastStatus = 0;
 static int lastFetchYday = -1;  // local day of the last full fetch: the calendar holds today only
 
 static int localYday() {
@@ -20,6 +20,7 @@ static int localYday() {
 }
 static FetchProgress progress = nullptr;
 void fetch_request_refresh() { refreshNow = true; }
+void fetch_status_postpone() { lastStatus = millis(); }
 
 static void report(FetchStep step, StepState state, const String& detail = "") {
   if (progress) progress(step, state, detail);
@@ -940,6 +941,43 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
 
 static bool timeValid() { return time(nullptr) > 1700000000; }
 
+// ---------- presence status ----------
+
+static String jiraUserName;  // from /myself, once
+
+static void fetchStatus(StatusData& st) {
+  String base = trimSlash(gCfg.jiraUrl);
+  String err;
+  if (!jiraUserName.length()) {
+    JsonDocument doc, filter;
+    filter["name"] = true;
+    if (!getJson(base + "/rest/api/2/myself", gCfg.jiraPat, doc, &filter, err)) { st.err = "myself: " + err; return; }
+    jiraUserName = doc["name"] | "";
+    if (!jiraUserName.length()) { st.err = "no user name"; return; }
+  }
+  JsonDocument doc, filter;
+  filter["value"] = true;
+  String url = base + "/rest/api/2/user/properties/" STATUS_PROPERTY "?username=" + urlEncode(jiraUserName);
+  if (!getJson(url, gCfg.jiraPat, doc, &filter, err)) {
+    if (err != "HTTP 404") { st.err = err; return; }  // 404: never set, so at the office
+  } else {
+    JsonVariant v = doc["value"];
+    st.code = v.is<const char*>() ? String(v.as<const char*>()) : String(v["status"] | "");
+    st.eta = v["eta"] | "";
+    st.note = String(v["note"] | "").substring(0, 120);
+    st.code.trim();
+    st.code.toUpperCase();
+  }
+  st.ok = true;
+  st.updated = time(nullptr);
+  model_lock();
+  const StatusData& prev = gData.status;
+  bool same = prev.ok && prev.code == st.code && prev.eta == st.eta && prev.note == st.note;
+  st.since = same ? prev.since : st.updated;
+  model_unlock();
+  LOG("status: %s%s%s", st.code.length() ? st.code.c_str() : "(none)", st.eta.length() ? " eta " : "", st.eta.c_str());
+}
+
 // Fills a fresh copy and swaps it in; on failure keeps the last good data and only records the error.
 template <typename T, typename Fn>
 static bool publish(const char* name, T Snapshot::*field, Fn fill, String& err) {
@@ -964,6 +1002,7 @@ RefreshKind fetch_due() {
   if (refreshNow || millis() - lastFetch >= gCfg.refreshMin * 60000UL) return REFRESH_FULL;
   if (lastFetchYday >= 0 && localYday() != lastFetchYday) return REFRESH_FULL;  // just past midnight
   if (millis() - lastKuma >= gCfg.kumaMin * 60000UL) return REFRESH_KUMA;
+  if (!settings_mock() && millis() - lastStatus >= STATUS_POLL_MS) return REFRESH_STATUS;
   return REFRESH_NONE;
 }
 
@@ -972,6 +1011,15 @@ void fetch_all(FetchProgress p, RefreshKind kind) {
   String err;
   bool full = kind == REFRESH_FULL;
   if (full) refreshNow = false;
+  if (!settings_mock()) {
+    // Status first: it is tiny, and with every refresh kind the board reflects it within a minute.
+    publish("status", &Snapshot::status, fetchStatus, err);
+    lastStatus = millis();
+  }
+  if (kind == REFRESH_STATUS) {
+    progress = nullptr;
+    return;
+  }
 
   if (!full) {
     for (int i = STEP_CARDS; i <= STEP_KPI; i++) report((FetchStep)i, STEP_SKIP, "unchanged");

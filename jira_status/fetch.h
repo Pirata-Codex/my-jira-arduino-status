@@ -8,8 +8,11 @@ enum StepState { STEP_WAIT, STEP_RUN, STEP_OK, STEP_FAIL, STEP_SKIP };
 typedef void (*FetchProgress)(FetchStep step, StepState state, const String& detail);
 
 // What is due: nothing, only Uptime Kuma (short interval), or everything.
-enum RefreshKind { REFRESH_NONE, REFRESH_KUMA, REFRESH_FULL };
+// REFRESH_STATUS: only your presence status (Jira user property), checked every minute in place.
+enum RefreshKind { REFRESH_NONE, REFRESH_KUMA, REFRESH_FULL, REFRESH_STATUS };
 RefreshKind fetch_due();
 void fetch_all(FetchProgress progress, RefreshKind kind);
 // Refresh on the next loop (after saving settings, or /refresh).
 void fetch_request_refresh();
+// Skip this minute's status check (too little memory); it runs again with the next refresh.
+void fetch_status_postpone();

@@ -639,6 +639,7 @@ void ui_init() {
   lv_screen_load(bootScreen);
 
   buildLoading();
+  buildStatus();
   buildHeader();
   buildTabBar();
   buildBanner();
@@ -1082,6 +1083,192 @@ static void renderAll(time_t now) {
   }
 }
 
+// ---------- presence status (full screen, alternates with HEALTH) ----------
+// Built once at boot and kept (like the loading screen), so a status change only restyles it.
+
+enum { ST_NONE, ST_WFH, ST_WAY, ST_LEFT, ST_AWAY };
+static const int PG_STATUS = PG_COUNT;  // page index of the status screen
+static int curStatus = ST_NONE;
+static lv_obj_t *stScreen, *stRingA, *stCore, *stIcon, *stPulse, *stTitle, *stEta, *stSub, *stNote, *stRoad,
+    *stCar, *stSince;
+static String stSubText;
+
+// "09:40" as a time: the first one at or after `from` minus 3 h (so an ETA just passed stays today).
+static time_t clockTime(const String& hhmmS, time_t from) {
+  int h, m;
+  if (sscanf(hhmmS.c_str(), "%d:%d", &h, &m) != 2 || h > 23 || m > 59) return 0;
+  struct tm lt;
+  localtime_r(&from, &lt);
+  time_t mid = from - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec);
+  time_t t = mid + h * 3600 + m * 60;
+  if (t < from - 3 * 3600) t += 86400;
+  return t;
+}
+
+// The status in effect now. Temporary ones clear themselves: ON THE WAY 2 h after the ETA (4 h
+// after it was set without one), LEFT and AWAY at their "back" time, LEFT without one at 06:00.
+static int effectiveStatus(time_t now) {
+  const StatusData& s = snap.status;
+  if (!s.ok || !s.code.length()) return ST_NONE;
+  String c = s.code;
+  c.replace(" ", "_");
+  c.replace("-", "_");
+  int k = c == "WFH" || c == "HOME" || c == "REMOTE"                ? ST_WFH
+        : c == "ON_THE_WAY" || c == "OTW" || c == "COMING"          ? ST_WAY
+        : c == "LEFT" || c == "OUT" || c == "GONE"                  ? ST_LEFT
+        : c == "AWAY" || c == "NOT_AVAILABLE" || c == "UNAVAILABLE" ? ST_AWAY
+                                                                    : ST_NONE;
+  time_t since = s.since ? s.since : now;
+  time_t eta = s.eta.length() ? clockTime(s.eta, since) : 0;
+  if (k == ST_WAY && now > (eta ? eta + 2 * 3600 : since + 4 * 3600)) return ST_NONE;
+  if ((k == ST_LEFT || k == ST_AWAY) && eta && now >= eta) return ST_NONE;
+  if (k == ST_LEFT && !eta) {
+    struct tm lt;
+    localtime_r(&since, &lt);
+    time_t mid = since - (lt.tm_hour * 3600 + lt.tm_min * 60 + lt.tm_sec);
+    if (now >= mid + (lt.tm_hour < 6 ? 6 : 30) * 3600) return ST_NONE;
+  }
+  return k;
+}
+
+static void opaCb(void* o, int32_t v) { lv_obj_set_style_opa((lv_obj_t*)o, (lv_opa_t)v, 0); }
+static void xCb(void* o, int32_t v) { lv_obj_set_x((lv_obj_t*)o, v); }
+// A ring growing out of the emblem and fading (WFH "signal").
+static void waveCb(void* o, int32_t v) {
+  lv_obj_t* p = (lv_obj_t*)o;
+  lv_obj_set_size(p, v, v);
+  lv_obj_set_pos(p, 99 - v / 2, 155 - v / 2);
+  lv_obj_set_style_border_opa(p, (lv_opa_t)(255 - (v - 40) * 255 / 140), 0);
+}
+
+static void animLoop(lv_obj_t* o, lv_anim_exec_xcb_t cb, int32_t from, int32_t to, uint32_t ms, bool back) {
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, o);
+  lv_anim_set_exec_cb(&a, cb);
+  lv_anim_set_values(&a, from, to);
+  lv_anim_set_duration(&a, ms);
+  if (back) lv_anim_set_playback_duration(&a, ms);
+  lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+  lv_anim_set_path_cb(&a, back ? lv_anim_path_ease_in_out : lv_anim_path_linear);
+  lv_anim_start(&a);
+}
+
+static void buildStatus() {
+  lv_obj_t* s = stScreen = newScreen();
+  panel(s, 4, 40, 472, 276, 10, C_LINE, true);
+  // Emblem centered at (99, 155): signal wave, track, two counter-rotating rings, core, icon.
+  stPulse = plain(s, 79, 135, 40, 40);
+  lv_obj_set_style_radius(stPulse, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_border_width(stPulse, 2, 0);
+  arcRing(s, 24, 80, 150, 3, C_DIM, true);
+  stRingA = arcRing(s, 37, 93, 124, 8, C_CYAN, false);
+  lv_arc_set_angles(stRingA, 0, 250);
+  lv_obj_t* ringB = arcRing(s, 52, 108, 94, 4, C_ICE, false);
+  lv_arc_set_angles(ringB, 0, 110);
+  spin(stRingA, 3600, false);
+  spin(ringB, 2400, true);
+  stCore = rect(s, 69, 125, 60, 60, C_CYAN, LV_RADIUS_CIRCLE);
+  lv_obj_set_style_bg_opa(stCore, LV_OPA_30, 0);
+  stIcon = text(s, &lv_font_montserrat_28, C_TEXT, "");
+
+  stTitle = hudText(s, F_HUD_L, C_CYAN, "");
+  lv_obj_set_style_text_letter_space(stTitle, 3, 0);
+  lv_obj_set_pos(stTitle, 196, 66);
+  stEta = text(s, F_CLOCK, C_TEXT, "");
+  lv_obj_set_pos(stEta, 196, 96);
+  stSub = hudText(s, F_HUD_M, C_ICE, "");
+  lv_obj_set_width(stSub, 270);
+  lv_label_set_long_mode(stSub, LV_LABEL_LONG_WRAP);
+  stNote = text(s, F_BODY, C_TEXT, "");
+  lv_obj_set_width(stNote, 270);
+  lv_label_set_long_mode(stNote, LV_LABEL_LONG_WRAP);
+  // Road for ON THE WAY: a marker drives toward the office.
+  stRoad = plain(s, 24, 256, 432, 24);
+  rect(stRoad, 0, 11, 400, 2, C_DIM);
+  for (int x = 8; x < 400; x += 24) rect(stRoad, x, 11, 10, 2, C_LINE);
+  lv_obj_set_pos(text(stRoad, &lv_font_montserrat_20, C_LIME, LV_SYMBOL_HOME), 408, 0);
+  stCar = text(stRoad, &lv_font_montserrat_20, C_AMBER, LV_SYMBOL_GPS);
+  stSince = hudText(s, F_HUD, C_MUTED, "");
+  lv_obj_align(stSince, LV_ALIGN_BOTTOM_RIGHT, -16, -10);
+}
+
+// Text that changes with the clock (the ETA countdown); relabels only when the wording changes.
+static void renderStatusTime(time_t now) {
+  if (curStatus == ST_NONE) return;
+  const StatusData& s = snap.status;
+  time_t since = s.since ? s.since : now;
+  time_t eta = s.eta.length() ? clockTime(s.eta, since) : 0;
+  String sub;
+  switch (curStatus) {
+    case ST_WFH: sub = "ONLINE · REACH ME ON CHAT OR PHONE"; break;
+    case ST_WAY: {
+      if (!eta) { sub = "HEADING TO THE OFFICE"; break; }
+      long mins = (eta - now + 59) / 60;
+      if (mins <= 0) sub = "ARRIVING ANY MINUTE";
+      else if (mins >= 60) sub = "ARRIVING IN " + String(mins / 60) + " H " + String(mins % 60) + " MIN";
+      else sub = "ARRIVING IN " + String(mins) + " MIN";
+      break;
+    }
+    case ST_LEFT: sub = eta ? "BACK AT " + hhmm(eta) : String("BACK NEXT WORKING DAY"); break;
+    default: sub = eta ? "BACK AT " + hhmm(eta) : String("PLEASE LEAVE A MESSAGE"); break;
+  }
+  if (sub == stSubText) return;
+  stSubText = sub;
+  lv_label_set_text(stSub, sub.c_str());
+}
+
+// Restyles the status screen for curStatus and starts its animation.
+static void renderStatus(time_t now) {
+  const StatusData& s = snap.status;
+  lv_anim_delete(stPulse, nullptr);
+  lv_anim_delete(stCar, nullptr);
+  lv_anim_delete(stCore, nullptr);
+  lv_obj_add_flag(stPulse, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(stRoad, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_style_opa(stCore, LV_OPA_COVER, 0);
+  stSubText = "";
+  if (curStatus == ST_NONE) return;
+  static const char* titles[] = {"", "WORKING FROM HOME", "ON MY WAY", "LEFT THE OFFICE", "NOT AVAILABLE"};
+  static const char* icons[] = {"", LV_SYMBOL_HOME, LV_SYMBOL_GPS, LV_SYMBOL_LEFT, LV_SYMBOL_CLOSE};
+  lv_color_t cols[] = {C_CYAN, C_CYAN, C_AMBER, C_VIOLET, C_RED};
+  lv_color_t c = cols[curStatus];
+  lv_obj_set_style_arc_color(stRingA, c, LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(stCore, c, 0);
+  lv_obj_set_style_border_color(stPulse, c, 0);
+  lv_obj_set_style_text_color(stTitle, c, 0);
+  lv_label_set_text(stTitle, titles[curStatus]);
+  lv_label_set_text(stIcon, icons[curStatus]);
+  lv_obj_align_to(stIcon, stCore, LV_ALIGN_CENTER, 0, 0);
+  time_t since = s.since ? s.since : now;
+  time_t eta = s.eta.length() ? clockTime(s.eta, since) : 0;
+  // Big time: the ETA when on the way, the "back" time otherwise.
+  lv_label_set_text(stEta, eta ? hhmm(eta).c_str() : "");
+  int y = eta ? 156 : 104;
+  lv_obj_set_pos(stSub, 196, y);
+  lv_obj_set_pos(stNote, 196, y + 46);
+  lv_label_set_text(stNote, s.note.c_str());
+  lv_label_set_text(stSince, ("SINCE " + hhmm(since)).c_str());
+  lv_obj_align(stSince, LV_ALIGN_BOTTOM_RIGHT, -16, -10);
+  switch (curStatus) {
+    case ST_WFH:  // a signal going out from home
+      lv_obj_remove_flag(stPulse, LV_OBJ_FLAG_HIDDEN);
+      animLoop(stPulse, waveCb, 40, 180, 2200, false);
+      break;
+    case ST_WAY:  // driving toward the office
+      lv_obj_remove_flag(stRoad, LV_OBJ_FLAG_HIDDEN);
+      animLoop(stCar, xCb, 0, 380, 6000, false);
+      break;
+    case ST_LEFT:  // fading out
+      animLoop(stCore, opaCb, LV_OPA_COVER, LV_OPA_20, 1800, true);
+      break;
+    default:  // slow red breathing
+      animLoop(stCore, opaCb, LV_OPA_COVER, LV_OPA_40, 1200, true);
+      break;
+  }
+  renderStatusTime(now);
+}
+
 // ---------- alerts: meeting soon / meeting live / outage ----------
 // Same rules as before; when several are active the banner rotates through them every 4 s
 // and shows a "1/2" counter.
@@ -1136,7 +1323,8 @@ static void addAlert(int mode, const String& tag, const String& text, const Stri
 
 static void collectAlerts(time_t now) {
   alertCount = 0;
-  for (int i = 0; i < snap.meet.count; i++) {
+  bool away = curStatus != ST_NONE;  // while you're away the board is for colleagues: outages only
+  for (int i = 0; !away && i < snap.meet.count; i++) {
     const Meeting& m = snap.meet.m[i];
     long since = now - m.start;
     if (since >= 0 && since < MEETING_ALERT_SEC)
@@ -1149,7 +1337,7 @@ static void collectAlerts(time_t now) {
       if (!h.m[i].up) names += (names.length() ? ", " : "") + h.m[i].name;
     addAlert(BN_DOWN, LV_SYMBOL_WARNING " SERVICE DOWN", names, String(h.count - h.up) + "/" + String(h.count));
   }
-  for (int i = 0; i < snap.meet.count; i++) {
+  for (int i = 0; !away && i < snap.meet.count; i++) {
     const Meeting& m = snap.meet.m[i];
     long until = m.start - now;
     if (until > 0 && until <= MEETING_SOON_SEC)
@@ -1191,6 +1379,10 @@ static String fridayPhrase(const struct tm& lt) {
     if (a.mode == BN_DOWN) return a.right.substring(0, a.right.indexOf('/')) + " SERVICE(S) DOWN, " + gCfg.ownerName;
     if (a.mode == BN_STARTED) return "YOU'RE LIVE, " + gCfg.ownerName;
     return "MEETING IN " + a.right.substring(0, a.right.indexOf(':')) + " MIN";
+  }
+  if (curStatus != ST_NONE) {
+    static const char* p[] = {"", "WORKING REMOTELY", "EN ROUTE TO THE OFFICE", "OFF SITE", "UNAVAILABLE"};
+    return String(p[curStatus]) + ", " + gCfg.ownerName;
   }
   const SprintData& s = snap.sprint;
   switch ((millis() / 8000) % 4) {
@@ -1236,9 +1428,17 @@ static void updateHeader(time_t now, const struct tm& lt) {
 
 // The ILI9488 over SPI does ~10 full frames/s, so the slide is short: a quick swipe, not a slow judder.
 static void showPage(int p, bool animate) {
-  LOG("page %s", PAGE_TITLES[p]);
+  LOG("page %s", p == PG_STATUS ? "STATUS" : PAGE_TITLES[p]);
   page = p;
-  lv_screen_load_anim(screens[p], animate ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_NONE, animate ? 250 : 0, 0, false);
+  lv_obj_t* scr = p == PG_STATUS ? stScreen : screens[p];
+  lv_screen_load_anim(scr, animate ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_NONE, animate ? 250 : 0, 0, false);
+  // While you're away only STATUS and HEALTH alternate, full screen: no tab bar.
+  if (curStatus != ST_NONE) lv_obj_add_flag(tabBar, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_remove_flag(tabBar, LV_OBJ_FLAG_HIDDEN);
+  if (p == PG_STATUS) {
+    lastSwitch = millis();
+    return;
+  }
   for (int i = 0; i < PG_COUNT; i++) lv_obj_set_style_text_color(tabLbl[i], i == p ? C_CYAN : C_MUTED, 0);
   lv_obj_set_x(tabLine, p * TAB_W + (TAB_W - 48) / 2);
   if (p == PG_CARDS) startCardPages();
@@ -1249,7 +1449,25 @@ static void showPage(int p, bool animate) {
 // The cards page stays until every page of cards has been shown once.
 static uint32_t pageDwellMs(int p) {
   uint32_t base = gCfg.rotateSec * 1000UL;
+  if (p == PG_STATUS) return base * 2;
   return p == PG_CARDS ? max(base, cardsDwellMs) : base;
+}
+
+static int nextPage(int p) {
+  if (curStatus != ST_NONE) return p == PG_STATUS ? PG_HEALTH : PG_STATUS;
+  return p == PG_STATUS ? PG_NOW : (p + 1) % PG_COUNT;
+}
+
+// Switches between the dashboard and the status screen when the status starts, changes or expires.
+static void syncStatus(time_t now, bool dataChanged) {
+  int k = effectiveStatus(now);
+  if (k == curStatus && !dataChanged) return;
+  bool was = curStatus != ST_NONE;
+  curStatus = k;
+  renderStatus(now);
+  hdPhraseText = "";
+  if (k != ST_NONE) showPage(PG_STATUS, was);
+  else if (was) showPage(PG_NOW, true);
 }
 
 void ui_apply_settings() {
@@ -1264,12 +1482,16 @@ void ui_tick() {
 
   model_lock();
   bool changed = gData.version != seenVersion;
+  bool statusChanged = false;
   if (changed) {
+    statusChanged = gData.status.code != snap.status.code || gData.status.eta != snap.status.eta ||
+                    gData.status.note != snap.status.note;
     snap = gData;
     seenVersion = gData.version;
   }
   model_unlock();
   if (changed) renderAll(now);
+  syncStatus(now, statusChanged);  // also notices a status expiring
 
   if (millis() - lastClock >= 1000) {
     lastClock = millis();
@@ -1289,10 +1511,11 @@ void ui_tick() {
       renderNowTime(now);
       renderAgenda(now);
     }
+    renderStatusTime(now);
   }
 
   if (millis() - lastSwitch >= pageDwellMs(page))
-    showPage((page + 1) % PG_COUNT, true);
+    showPage(nextPage(page), true);
 }
 
 // Restarting is the recovery for a fragmented heap: everything is fetched again on boot.
@@ -1330,7 +1553,30 @@ static void refreshKumaInPlace() {
   if (memoryError(h.err)) restartFor("kuma ran out of memory");
 }
 
+// Status check with the dashboard kept on screen (every minute).
+static void refreshStatusInPlace() {
+  if (ESP.getMaxAllocHeap() < STATUS_INPLACE_BLOCK) {
+    LOG("status: skipped, largest block %uk", (unsigned)(ESP.getMaxAllocHeap() / 1024));
+    fetch_status_postpone();
+    return;
+  }
+  fetch_all(nullptr, REFRESH_STATUS);
+  model_lock();
+  bool changed = gData.status.code != snap.status.code || gData.status.eta != snap.status.eta ||
+                 gData.status.note != snap.status.note || gData.status.ok != snap.status.ok;
+  snap.status = gData.status;
+  seenVersion = gData.version;  // only the status was fetched
+  model_unlock();
+  syncStatus(time(nullptr), changed);
+  if (memoryError(snap.status.err)) restartFor("status check ran out of memory");
+}
+
 void ui_refresh(RefreshKind kind) {
+  if (kind == REFRESH_STATUS) {
+    if (dashboardBuilt) refreshStatusInPlace();
+    else fetch_status_postpone();
+    return;
+  }
   if (kind == REFRESH_KUMA && dashboardBuilt && ESP.getFreeHeap() >= KUMA_INPLACE_HEAP) {
     refreshKumaInPlace();
     return;
@@ -1378,10 +1624,11 @@ void ui_refresh(RefreshKind kind) {
   renderAll(time(nullptr));
   started = true;
   lv_obj_remove_flag(header, LV_OBJ_FLAG_HIDDEN);
-  lv_obj_remove_flag(tabBar, LV_OBJ_FLAG_HIDDEN);
   hdPhraseText = "";
   lastClock = 0;
-  showPage(PG_NOW, false);
+  curStatus = effectiveStatus(time(nullptr));
+  renderStatus(time(nullptr));
+  showPage(curStatus != ST_NONE ? PG_STATUS : PG_NOW, false);
   refreshesDone++;
   LOG("refresh: done, loop stack left %u bytes", (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 }

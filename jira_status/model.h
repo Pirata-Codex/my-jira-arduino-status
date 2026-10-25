@@ -62,7 +62,18 @@ struct MeetingData {
   time_t updated = 0;
 };
 
+// Your presence, from the Jira user property STATUS_PROPERTY: {"status": "WFH", "eta": "09:40", "note": "..."}.
+// status: WFH, ON_THE_WAY, LEFT, AWAY, IN (or no property = at the office).
+struct StatusData {
+  bool ok = false;
+  String err;
+  String code, eta, note;
+  time_t since = 0;    // when the board first saw this value
+  time_t updated = 0;
+};
+
 struct Snapshot {
+  StatusData status;
   SprintData sprint;
   HealthData health;
   MeetingData meet;
