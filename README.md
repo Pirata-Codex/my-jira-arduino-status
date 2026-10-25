@@ -42,6 +42,50 @@ A banner slides over every screen:
 
 Several at once rotate every 4 s with a `1/2` counter. The header line changes with them: `GOOD MORNING, BOSS`, `YOU'RE LIVE, BOSS`, `1 SERVICE(S) DOWN, BOSS`.
 
+## ◢ Presence status
+
+Tell colleagues at your desk where you are. Your bot (or any script) writes your status to a hidden Jira **user property** on your own account; the board checks it every minute. While a status is set, the board shows a full-screen animated status card that alternates with the Kuma health screen. The tab bar and meeting banners are hidden; outage alerts still show.
+
+| `status` | Screen | Animation | Clears itself |
+|---|---|---|---|
+| `WFH` | WORKING FROM HOME | radar sweep with blips, signal bars, `UPLINK ACTIVE` | no — until changed |
+| `ON_THE_WAY` | ON MY WAY · big ETA · `ARRIVING IN 12 MIN` | route from HOME to HQ; the dot moves with real progress toward the ETA, HQ flashes on arrival | 2 h after the ETA (4 h after it was set without one) |
+| `LEFT` | LEFT THE OFFICE · `BACK AT 09:00` | shutdown sequence, then standby blink with a scan line | at `eta`, else 06:00 next morning |
+| `AWAY` | NOT AVAILABLE · `DO NOT DISTURB` | red shield with lights chasing its edge, hazard tape | at `eta`, else no |
+| `IN` or no property | normal dashboard | – | – |
+
+Every change types the title in with a short boot flicker. The status screen exists only while a status is set, so it costs no RAM at the office.
+
+**API** — your own account, read access token is enough (no admin needed):
+
+```
+PUT    $JIRA/rest/api/2/user/properties/friday.status?username=$USER
+DELETE $JIRA/rest/api/2/user/properties/friday.status?username=$USER   (back to normal)
+GET    $JIRA/rest/api/2/user/properties/friday.status?username=$USER   (404 = no status)
+Headers: Authorization: Bearer $PAT, Content-Type: application/json
+Body:    {"status": "...", "eta": "HH:MM", "note": "..."}
+```
+
+- `eta` (optional, 24 h local time): arrival for `ON_THE_WAY`, "back at" for `LEFT` / `AWAY`.
+- `note` (optional, up to 120 characters, Persian works).
+- Aliases: `HOME`/`REMOTE`, `OTW`/`COMING`, `OUT`/`GONE`, `NOT_AVAILABLE`/`UNAVAILABLE`; case, spaces and dashes don't matter.
+- Your username is the `name` from `GET $JIRA/rest/api/2/myself`.
+
+```bash
+# working from home
+curl -X PUT -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" -d '{"status":"WFH","note":"Available on Teams"}' "$JIRA/rest/api/2/user/properties/friday.status?username=$USER"
+# on the way, arriving 09:40
+curl -X PUT -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" -d '{"status":"ON_THE_WAY","eta":"09:40"}' "$JIRA/rest/api/2/user/properties/friday.status?username=$USER"
+# left, back at 09:00
+curl -X PUT -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" -d '{"status":"LEFT","eta":"09:00"}' "$JIRA/rest/api/2/user/properties/friday.status?username=$USER"
+# not available until 14:00
+curl -X PUT -H "Authorization: Bearer $PAT" -H "Content-Type: application/json" -d '{"status":"AWAY","eta":"14:00","note":"In a client meeting"}' "$JIRA/rest/api/2/user/properties/friday.status?username=$USER"
+# back at the office
+curl -X DELETE -H "Authorization: Bearer $PAT" "$JIRA/rest/api/2/user/properties/friday.status?username=$USER"
+```
+
+Suggested bot commands: `/wfh [note]`, `/otw 09:40 [note]`, `/left [09:00]`, `/away [14:00] [note]`, `/in`, `/status`.
+
 ## ◢ Systems
 
 ```
