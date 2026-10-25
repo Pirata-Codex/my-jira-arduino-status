@@ -7,6 +7,7 @@ enum CardCat : uint8_t { CAT_TODO, CAT_PROGRESS, CAT_REVIEW, CAT_DONE };
 constexpr int MAX_CARDS = 30;
 constexpr int MAX_MONITORS = 12;
 constexpr int MAX_MEETINGS = 10;
+constexpr int MAX_FUTURE = 6;  // upcoming meetings after today (the agenda shows up to 4)
 
 struct Card {
   String key, title, status;
@@ -56,6 +57,8 @@ struct MeetingData {
   String err;
   int count = 0;
   Meeting m[MAX_MEETINGS];    // today's meetings, sorted by start
+  int futureCount = 0;
+  Meeting future[MAX_FUTURE]; // the earliest meetings after today (AGENDA_AHEAD_DAYS), sorted
   time_t updated = 0;
 };
 

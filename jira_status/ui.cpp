@@ -796,28 +796,43 @@ static void layoutAgenda(int n) {
 }
 
 // Agenda: the meetings that haven't ended yet (up to 4): time, title, room or link, state.
+// Pill text for a meeting on a later day: "TOMORROW", else the weekday and date ("MON 27").
+static String dayPill(time_t start, time_t now) {
+  struct tm a, b;
+  localtime_r(&now, &a);
+  localtime_r(&start, &b);
+  time_t t0 = now - (a.tm_hour * 3600 + a.tm_min * 60 + a.tm_sec);
+  if (start - t0 < 2 * 86400L) return "TOMORROW";
+  static const char* wd[] = {"SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"};
+  return String(wd[b.tm_wday]) + " " + String(b.tm_mday);
+}
+
+// Today's meetings that haven't ended come first; free rows are filled with the next days' ones.
 static void renderAgenda(time_t now) {
   if (!agList) return;
   const MeetingData& d = snap.meet;
   int first = 0;
   while (first < d.count && d.m[first].end <= now) first++;
-  int n = d.configured && d.ok ? min(d.count - first, MAX_AGENDA_ROWS) : 0;
+  int today = d.configured && d.ok ? min(d.count - first, MAX_AGENDA_ROWS) : 0;
+  int later = d.configured && d.ok ? min(d.futureCount, MAX_AGENDA_ROWS - today) : 0;
+  int n = today + later;
   layoutAgenda(n);
   if (!n) {
     String err = "CALENDAR: " + d.err;
+    String none = "NO MEETINGS IN THE NEXT " + String(AGENDA_AHEAD_DAYS) + " DAYS";
     setMsg(agMsg, !d.configured ? "CALENDAR NOT SET · ADD AN .ICS URL ON THE SETTINGS PAGE"
                   : !d.ok       ? err.c_str()
-                  : d.count     ? "NO MORE MEETINGS TODAY"
-                                : "NO MEETINGS TODAY");
+                                : none.c_str());
     return;
   }
   setMsg(agMsg, nullptr);
   const Meeting* next = nextMeeting(now);
   for (int row = 0; row < n; row++) {
-    const Meeting& m = d.m[first + row];
+    bool isToday = row < today;
+    const Meeting& m = isToday ? d.m[first + row] : d.future[row - today];
     MeetSlot& r = agRows[row];
-    bool live = m.start <= now;
-    lv_color_t col = live ? C_RED : &m == next ? C_AMBER : C_ICE;
+    bool live = isToday && m.start <= now;
+    lv_color_t col = live ? C_RED : &m == next ? C_AMBER : isToday ? C_ICE : C_MUTED;
     lv_obj_set_style_line_color(r.outline, live ? C_RED : C_LINE, 0);
     lv_obj_set_style_bg_color(r.bar, col, 0);
     lv_label_set_text(r.start, hhmm(m.start).c_str());
@@ -825,7 +840,9 @@ static void renderAgenda(time_t now) {
     lv_label_set_text(r.title, m.title.c_str());
     lv_label_set_text(r.where, m.where.length() ? m.where.c_str() : "-");
     long mins = (m.start - now) / 60;
-    String state = live ? String("LIVE") : mins >= 60 ? "IN " + String(mins / 60) + "H" : "IN " + String(max(1L, mins)) + "M";
+    String state = !isToday ? dayPill(m.start, now)
+                 : live     ? String("LIVE")
+                 : mins >= 60 ? "IN " + String(mins / 60) + "H" : "IN " + String(max(1L, mins)) + "M";
     lv_obj_set_style_border_color(r.pill, col, 0);
     lv_label_set_text(r.pillLbl, state.c_str());
     lv_obj_set_style_text_color(r.pillLbl, col, 0);

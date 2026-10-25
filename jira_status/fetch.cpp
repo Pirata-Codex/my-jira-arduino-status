@@ -461,13 +461,15 @@ class ChunkedStream : public Stream {
   long left_ = 0;
 };
 
-static void addMeeting(MeetingData& d, const Meeting& m) {
-  if (d.count < MAX_MEETINGS) { d.m[d.count++] = m; return; }
-  // Full: replace the latest one if this starts earlier.
+// Adds m to list (count of max); when full, it replaces the latest one if it starts earlier.
+static void addTo(Meeting* list, int& count, int max, const Meeting& m) {
+  if (count < max) { list[count++] = m; return; }
   int latest = 0;
-  for (int i = 1; i < d.count; i++) if (d.m[i].start > d.m[latest].start) latest = i;
-  if (m.start < d.m[latest].start) d.m[latest] = m;
+  for (int i = 1; i < count; i++) if (list[i].start > list[latest].start) latest = i;
+  if (m.start < list[latest].start) list[latest] = m;
 }
+
+static void addMeeting(MeetingData& d, const Meeting& m) { addTo(d.m, d.count, MAX_MEETINGS, m); }
 
 // Meeting place shown on the board, in this order:
 //  1. a room code like "3M2" or "BM4" (letters/digits, "M", digits) from the location, title or description;
@@ -529,7 +531,7 @@ constexpr int MAX_EXDATES = 24;
 static time_t icsExdates[MAX_EXDATES];
 static int icsExCount;
 // Today's occurrences replaced by a RECURRENCE-ID event: (uid, original start).
-constexpr int MAX_OVERRIDES = 16;
+constexpr int MAX_OVERRIDES = 32;
 static uint32_t ovUid[MAX_OVERRIDES];
 static time_t ovStart[MAX_OVERRIDES];
 static int ovCount;
@@ -647,14 +649,26 @@ static void parseExdates(const String& value) {
 }
 
 // After the whole file: drop rule occurrences that a RECURRENCE-ID event replaced or cancelled.
-static void applyOverrides(MeetingData& d) {
+static void dropOverridden(Meeting* list, int& count) {
   for (int o = 0; o < ovCount; o++)
-    for (int i = 0; i < d.count; i++)
-      if (d.m[i].fromRule && d.m[i].uid == ovUid[o] && d.m[i].start == ovStart[o]) {
-        for (int j = i; j < d.count - 1; j++) d.m[j] = d.m[j + 1];
-        d.m[--d.count] = Meeting();
+    for (int i = 0; i < count; i++)
+      if (list[i].fromRule && list[i].uid == ovUid[o] && list[i].start == ovStart[o]) {
+        for (int j = i; j < count - 1; j++) list[j] = list[j + 1];
+        list[--count] = Meeting();
         break;
       }
+}
+
+static void applyOverrides(MeetingData& d) {
+  dropOverridden(d.m, d.count);
+  dropOverridden(d.future, d.futureCount);
+}
+
+// Files a meeting under today or the upcoming list (or nowhere, when outside the window).
+static void placeMeeting(MeetingData& d, const Meeting& m, time_t dayStart, time_t dayEnd) {
+  if (m.start >= dayStart && m.start < dayEnd) addMeeting(d, m);
+  else if (m.start >= dayEnd && m.start < dayEnd + AGENDA_AHEAD_DAYS * 86400L)
+    addTo(d.future, d.futureCount, MAX_FUTURE, m);
 }
 
 static void handleIcsLine(const String& line, MeetingData& d, Meeting& cur, bool& inEvent, bool& allDay, time_t dayStart, time_t dayEnd) {
@@ -674,25 +688,34 @@ static void handleIcsLine(const String& line, MeetingData& d, Meeting& cur, bool
     inEvent = false;
     if (allDay) return;
     time_t dur = cur.end > cur.start ? cur.end - cur.start : 30 * 60;
+    time_t windowEnd = dayEnd + AGENDA_AHEAD_DAYS * 86400L;
     if (icsRecId) {
       // A changed occurrence: it replaces the series' occurrence at icsRecId.
-      if (icsRecId >= dayStart && icsRecId < dayEnd && ovCount < MAX_OVERRIDES) {
+      if (icsRecId >= dayStart && icsRecId < windowEnd && ovCount < MAX_OVERRIDES) {
         ovUid[ovCount] = icsUid;
         ovStart[ovCount++] = icsRecId;
       }
-    } else if (icsRule.length()) {
-      time_t occ = occurrenceToday(icsRule, cur.start, dayStart);
-      for (int i = 0; occ && i < icsExCount; i++)
-        if (icsExdates[i] == occ) occ = 0;
-      if (!occ) return;
-      cur.start = occ;
-      cur.fromRule = true;
     }
-    if (icsCancelled || cur.start < dayStart || cur.start >= dayEnd) return;
-    cur.end = cur.start + dur;
+    if (icsCancelled) return;
     cur.uid = icsUid;
     cur.where = meetingPlace(cur.where, cur.title, icsDesc).substring(0, 60);
-    addMeeting(d, cur);
+    if (icsRule.length() && !icsRecId) {
+      // A series: today's occurrence and those of the next days (Iran has no DST: days are 86400 s).
+      time_t first = cur.start;
+      cur.fromRule = true;
+      for (int k = 0; k <= AGENDA_AHEAD_DAYS; k++) {
+        time_t occ = occurrenceToday(icsRule, first, dayStart + k * 86400L);
+        for (int i = 0; occ && i < icsExCount; i++)
+          if (icsExdates[i] == occ) occ = 0;
+        if (!occ) continue;
+        cur.start = occ;
+        cur.end = occ + dur;
+        placeMeeting(d, cur, dayStart, dayEnd);
+      }
+      return;
+    }
+    cur.end = cur.start + dur;
+    placeMeeting(d, cur, dayStart, dayEnd);
     return;
   }
   // Name and value are split at the first ':' outside quotes: Outlook writes
@@ -884,10 +907,17 @@ static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
   LOG("calendar: read %u of %d bytes in %lu ms%s, %d meetings today", (unsigned)bytesRead, total,
       millis() - t0, timedOut ? " (TIMED OUT)" : "", d.count);
 
-  std::sort(d.m, d.m + d.count, [](const Meeting& a, const Meeting& b) { return a.start < b.start; });
+  auto byStart = [](const Meeting& a, const Meeting& b) { return a.start < b.start; };
+  std::sort(d.m, d.m + d.count, byStart);
+  std::sort(d.future, d.future + d.futureCount, byStart);
   for (int i = 0; i < d.count; i++)
     LOG("  meeting %s-%s %s @ %s", hhmmLog(d.m[i].start).c_str(), hhmmLog(d.m[i].end).c_str(),
         d.m[i].title.c_str(), d.m[i].where.c_str());
+  for (int i = 0; i < d.futureCount; i++) {
+    struct tm ft;
+    localtime_r(&d.future[i].start, &ft);
+    LOG("  upcoming %02d/%02d %s %s", ft.tm_mon + 1, ft.tm_mday, hhmmLog(d.future[i].start).c_str(), d.future[i].title.c_str());
+  }
   if (timedOut) {
     // A cut-off file would silently miss today's events (they are at the end); report it instead.
     d.err = "timed out after " + String(bytesRead / 1024) + " KB";
