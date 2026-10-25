@@ -1115,8 +1115,10 @@ static lv_obj_t* nvHqLine;
 // LEFT
 static lv_obj_t *lfRingA, *lfRingB, *lfCore, *lfScan, *lfOuter;
 // AWAY
-static lv_obj_t *awSeg[3], *awInner, *awCore, *awStripes;
-static lv_point_precise_t awSegPts[3][2], awInnerPts[7];
+// The shield stays still (a rotating 150 px hexagon redraws too much per frame on this panel);
+// two short lights chase around its edge instead, so each frame only redraws two small patches.
+static lv_obj_t *awRunner[2], *awCore, *awStripes;
+static lv_point_precise_t awOuterPts[7], awInnerPts[7], awRunPts[2][3];
 
 static const int SCX = 99, SCY = 158;  // emblem center
 
@@ -1250,10 +1252,27 @@ static void buildShutdown(lv_obj_t* g) {
   lv_obj_set_style_bg_opa(lfScan, LV_OPA_40, 0);
 }
 
+// Point at perimeter position u (0..6, one unit per edge) of a hexagon of radius r around the emblem.
+static lv_point_precise_t hexAt(float r, float u) {
+  u = fmodf(u, 6);
+  int e = (int)u;
+  float f = u - e, a = e * PI / 3 - PI / 2, b = a + PI / 3;
+  return P(SCX + r * ((1 - f) * cosf(a) + f * cosf(b)), SCY + r * ((1 - f) * sinf(a) + f * sinf(b)));
+}
+
 static void buildLockdown(lv_obj_t* g) {
-  for (int i = 0; i < 3; i++) awSeg[i] = liveLine(g, awSegPts[i], 2, C_RED, 4);
-  awInner = liveLine(g, awInnerPts, 7, C_RED, 2);
-  lv_obj_set_style_line_opa(awInner, LV_OPA_50, 0);
+  for (int i = 0; i < 7; i++) {
+    awOuterPts[i] = hexAt(72, i);
+    awInnerPts[i] = hexAt(56, i + 0.5f);
+  }
+  lv_obj_t* outer = liveLine(g, awOuterPts, 7, C_RED, 3);
+  lv_obj_set_style_line_opa(outer, LV_OPA_40, 0);
+  lv_obj_t* inner = liveLine(g, awInnerPts, 7, C_RED, 1);
+  lv_obj_set_style_line_opa(inner, LV_OPA_40, 0);
+  for (int i = 0; i < 2; i++) {
+    for (int j = 0; j < 3; j++) awRunPts[i][j] = hexAt(72, i * 3);
+    awRunner[i] = liveLine(g, awRunPts[i], 3, C_RED, 5);
+  }
   awCore = dot(g, SCX, SCY, 20, C_RED);
   rect(awCore, 11, 18, 18, 4, C_BG);  // "no entry" bar
   // Hazard tape: slanted stripes in a clipped strip, slid left to right.
@@ -1349,18 +1368,15 @@ static void frameShutdown(float t) {
 }
 
 static void frameLockdown(float t) {
-  float ro = t * 0.8f, ri = -t * 1.2f;
-  for (int i = 0; i < 3; i++) {
-    float a = ro + i * 2 * PI / 3, b = a + PI / 3;
-    awSegPts[i][0] = P(SCX + 72 * cosf(a), SCY + 72 * sinf(a));
-    awSegPts[i][1] = P(SCX + 72 * cosf(b), SCY + 72 * sinf(b));
-    lv_line_set_points(awSeg[i], awSegPts[i], 2);
+  // Each light covers 0.6 of an edge and bends around the corner it is crossing.
+  for (int i = 0; i < 2; i++) {
+    float u = fmodf(t * 4, 6) + i * 3, v = u + 0.6f;
+    float corner = floorf(v);
+    awRunPts[i][0] = hexAt(72, u);
+    awRunPts[i][1] = hexAt(72, corner > u ? corner : (u + v) / 2);
+    awRunPts[i][2] = hexAt(72, v);
+    lv_line_set_points(awRunner[i], awRunPts[i], 3);
   }
-  for (int i = 0; i < 7; i++) {
-    float a = ri + i * PI / 3;
-    awInnerPts[i] = P(SCX + 56 * cosf(a), SCY + 56 * sinf(a));
-  }
-  lv_line_set_points(awInner, awInnerPts, 7);
   lv_obj_set_style_opa(awCore, 100 + (int)(155 * fabsf(sinf(t * 2.6f))), 0);
   lv_obj_set_x(awStripes, -20 + (int)(t * 30) % 20);
   if (((int)(t * 1.5f)) % 2) lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
