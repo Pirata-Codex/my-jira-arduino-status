@@ -623,6 +623,8 @@ static void onProgress(FetchStep step, StepState state, const String& detail) {
   lv_refr_now(nullptr);  // draw now: the next fetch blocks the loop
 }
 
+static void buildStatus();  // presence status screen, defined further down
+
 void ui_init() {
   bootScreen = newScreen();
   reactor(bootScreen, (SCREEN_W - 110) / 2, 26, 110, true);
