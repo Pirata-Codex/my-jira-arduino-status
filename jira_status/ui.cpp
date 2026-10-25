@@ -623,8 +623,6 @@ static void onProgress(FetchStep step, StepState state, const String& detail) {
   lv_refr_now(nullptr);  // draw now: the next fetch blocks the loop
 }
 
-static void buildStatus();  // presence status screen, defined further down
-
 void ui_init() {
   bootScreen = newScreen();
   reactor(bootScreen, (SCREEN_W - 110) / 2, 26, 110, true);
@@ -641,7 +639,6 @@ void ui_init() {
   lv_screen_load(bootScreen);
 
   buildLoading();
-  buildStatus();
   buildHeader();
   buildTabBar();
   buildBanner();
@@ -1105,7 +1102,7 @@ static lv_obj_t *stScreen, *stBody, *stTitle, *stSub, *stExtra, *stNote, *stSinc
 static lv_obj_t* stGroup[5];  // per-status parts (index = ST_*)
 static String stTitleText;
 // WFH
-constexpr int BEAM_TRAIL = 6, BLIPS = 4;
+constexpr int BEAM_TRAIL = 4, BLIPS = 4;
 static lv_obj_t *rdBeam[BEAM_TRAIL], *rdBlip[BLIPS], *rdBar[5], *rdUplink;
 static lv_point_precise_t rdBeamPts[BEAM_TRAIL][2];
 static const float blipAng[BLIPS] = {0.8f, 2.6f, 4.1f, 5.3f};
@@ -1371,7 +1368,7 @@ static void frameLockdown(float t) {
 }
 
 static void statusFrame(lv_timer_t*) {
-  if (curStatus == ST_NONE || lv_screen_active() != stScreen) return;
+  if (!stScreen || curStatus == ST_NONE || lv_screen_active() != stScreen) return;
   float t = stPhase();
   time_t now = time(nullptr);
   // Boot flicker for the first third of a second.
@@ -1385,15 +1382,13 @@ static void statusFrame(lv_timer_t*) {
   }
 }
 
+// The status screen exists only while a status is set, and holds only the current status's parts:
+// it costs nothing while you're at the office.
 static void buildStatus() {
   lv_obj_t* s = stScreen = newScreen();
   panel(s, 4, 40, 472, 276, 10, C_LINE, true);
   stBody = plain(s, 0, 0, SCREEN_W, SCREEN_H);
-  stGroup[ST_NONE] = nullptr;
-  buildRadar(stGroup[ST_WFH] = group(stBody));
-  buildNav(stGroup[ST_WAY] = group(stBody));
-  buildShutdown(stGroup[ST_LEFT] = group(stBody));
-  buildLockdown(stGroup[ST_AWAY] = group(stBody));
+  for (lv_obj_t*& g : stGroup) g = nullptr;
   stTitle = hudText(stBody, F_HUD_L, C_CYAN, "");
   lv_obj_set_style_text_letter_space(stTitle, 3, 0);
   stSub = hudText(stBody, F_HUD_M, C_ICE, "");
@@ -1404,7 +1399,28 @@ static void buildStatus() {
   lv_obj_set_width(stNote, 270);
   lv_label_set_long_mode(stNote, LV_LABEL_LONG_WRAP);
   stSince = hudText(stBody, F_HUD, C_MUTED, "");
-  lv_timer_create(statusFrame, 40, nullptr);
+  static lv_timer_t* timer = nullptr;
+  if (!timer) timer = lv_timer_create(statusFrame, 40, nullptr);
+}
+
+static void dropStatusScreen() {
+  if (!stScreen) return;
+  lv_obj_delete_async(stScreen);
+  stScreen = nullptr;
+  for (lv_obj_t*& g : stGroup) g = nullptr;
+}
+
+// Builds the parts of status k (first in front of the texts) and deletes the other statuses' parts.
+static void useGroup(int k) {
+  for (int i = ST_WFH; i <= ST_AWAY; i++)
+    if (i != k && stGroup[i]) { lv_obj_delete(stGroup[i]); stGroup[i] = nullptr; }
+  if (stGroup[k]) return;
+  lv_obj_t* g = stGroup[k] = group(stBody);
+  lv_obj_move_to_index(g, 0);
+  if (k == ST_WFH) buildRadar(g);
+  else if (k == ST_WAY) buildNav(g);
+  else if (k == ST_LEFT) buildShutdown(g);
+  else buildLockdown(g);
 }
 
 // Text that changes with the clock (the ETA countdown); relabels only when the wording changes.
@@ -1434,10 +1450,11 @@ static void renderStatusTime(time_t now) {
 
 // Shows the parts of curStatus, places the texts and restarts the intro (typing, flicker, shutdown).
 static void renderStatus(time_t now) {
-  for (int i = ST_WFH; i <= ST_AWAY; i++) lv_obj_add_flag(stGroup[i], LV_OBJ_FLAG_HIDDEN);
   stSubText = stTitleText = "";
   stShownAt = millis();
-  if (curStatus == ST_NONE) return;
+  if (curStatus == ST_NONE) { dropStatusScreen(); return; }
+  if (!stScreen) buildStatus();
+  useGroup(curStatus);
   const StatusData& s = snap.status;
   time_t since = s.since ? s.since : now;
   time_t eta = s.eta.length() ? clockTime(s.eta, since) : 0;
@@ -1692,10 +1709,14 @@ static void syncStatus(time_t now, bool dataChanged) {
   if (k == curStatus && !dataChanged) return;
   bool was = curStatus != ST_NONE;
   curStatus = k;
-  renderStatus(now);
   hdPhraseText = "";
-  if (k != ST_NONE) showPage(PG_STATUS, was);
-  else if (was) showPage(PG_NOW, true);
+  if (k == ST_NONE) {
+    if (was) showPage(PG_NOW, false);  // leave the status screen before it is deleted
+    renderStatus(now);
+    return;
+  }
+  renderStatus(now);
+  showPage(PG_STATUS, was);
 }
 
 void ui_apply_settings() {
@@ -1827,6 +1848,11 @@ void ui_refresh(RefreshKind kind) {
     agLayout = -1;
     for (MeetSlot& m : agRows) m.box = nullptr;  // deleted with their screen
     dashboardBuilt = false;
+  }
+  if (stScreen) {  // rebuilt after the fetch if a status is still set
+    lv_obj_delete(stScreen);
+    stScreen = nullptr;
+    for (lv_obj_t*& g : stGroup) g = nullptr;
   }
   // The UI copy of the data is rebuilt after the fetch; free its strings now as well.
   snap = Snapshot();
