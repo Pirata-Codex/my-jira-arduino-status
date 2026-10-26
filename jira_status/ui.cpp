@@ -644,13 +644,10 @@ void ui_init() {
   buildBanner();
 }
 
+// Only the page on screen exists: showPage builds it and frees the one it replaces. Keeping all
+// six pages alive filled LVGL's pool, the overflow went to the heap, and an HTTPS check running
+// next to the dashboard then left too little for drawing text (out of memory, reset).
 static void buildDashboard() {
-  buildNow();
-  buildAgenda();
-  buildSprint();
-  buildCards();
-  buildKpi();
-  buildHealth();
   dashboardBuilt = true;
   bannerMode = -1;
   cardsDwellMs = 0;
@@ -1067,12 +1064,12 @@ static void renderHealth() {
 
 static void renderAll(time_t now) {
   LOG("render: %d cards, %d monitors, %d meetings", snap.sprint.count, snap.health.count, snap.meet.count);
-  renderNow(now);
-  renderAgenda(now);
-  renderSprint(now);
-  renderCards();
-  renderKpi();
-  renderHealth();
+  if (screens[PG_NOW]) renderNow(now);
+  if (screens[PG_AGENDA]) renderAgenda(now);
+  if (screens[PG_SPRINT]) renderSprint(now);
+  if (screens[PG_CARDS]) renderCards();
+  if (screens[PG_KPI]) renderKpi();
+  if (screens[PG_HEALTH]) renderHealth();
   const HealthData& h = snap.health;
   if (h.count) {
     lv_label_set_text_fmt(hdHealth, "%s %d/%d", h.up == h.count ? LV_SYMBOL_OK : LV_SYMBOL_WARNING, h.up, h.count);
@@ -1687,12 +1684,44 @@ static void updateHeader(time_t now, const struct tm& lt) {
 
 // ---------- loop ----------
 
+static void buildPage(int p, time_t now) {
+  switch (p) {
+    case PG_NOW: buildNow(); renderNow(now); break;
+    case PG_AGENDA: buildAgenda(); renderAgenda(now); break;
+    case PG_SPRINT: buildSprint(); renderSprint(now); break;
+    case PG_CARDS: buildCards(); renderCards(); break;
+    case PG_KPI: buildKpi(); renderKpi(); break;
+    default: buildHealth(); renderHealth(); break;
+  }
+}
+
+// Frees page p (after the slide animation, which still draws it) and forgets its slots.
+static void dropPage(int p) {
+  if (p < 0 || p >= PG_COUNT || !screens[p]) return;
+  lv_obj_delete_delayed(screens[p], 400);
+  screens[p] = nullptr;
+  if (p == PG_AGENDA) {
+    agList = nullptr;
+    agLayout = -1;
+    for (MeetSlot& m : agRows) m.box = nullptr;
+  } else if (p == PG_CARDS) {
+    cardList = nullptr;
+    cardRowsBuilt = 0;
+  } else if (p == PG_HEALTH) {
+    hlGrid = nullptr;
+    hlTilesBuilt = 0;
+  }
+}
+
 // The ILI9488 over SPI does ~10 full frames/s, so the slide is short: a quick swipe, not a slow judder.
 static void showPage(int p, bool animate) {
   LOG("page %s", p == PG_STATUS ? "STATUS" : PAGE_TITLES[p]);
+  int old = page;
+  if (p != PG_STATUS && !screens[p]) buildPage(p, time(nullptr));
   page = p;
   lv_obj_t* scr = p == PG_STATUS ? stScreen : screens[p];
   lv_screen_load_anim(scr, animate ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_NONE, animate ? 250 : 0, 0, false);
+  if (old != p) dropPage(old);
   // While you're away only STATUS and HEALTH alternate, full screen: no tab bar.
   if (curStatus != ST_NONE) lv_obj_add_flag(tabBar, LV_OBJ_FLAG_HIDDEN);
   else lv_obj_remove_flag(tabBar, LV_OBJ_FLAG_HIDDEN);
@@ -1767,14 +1796,16 @@ void ui_tick() {
     strftime(date, sizeof(date), "%a %d %b", &lt);
     String d = date;
     d.toUpperCase();
-    lv_label_set_text(nowClock, clock);
-    lv_label_set_text(nowDate, d.c_str());
-    lv_label_set_text(nowJalali, jalaliDate(lt).c_str());
+    if (screens[PG_NOW]) {
+      lv_label_set_text(nowClock, clock);
+      lv_label_set_text(nowDate, d.c_str());
+      lv_label_set_text(nowJalali, jalaliDate(lt).c_str());
+    }
     updateBanner(now);
     updateHeader(now, lt);
     if (lt.tm_sec == 0) {  // meeting countdown, "now" marker, agenda states
-      renderNowTime(now);
-      renderAgenda(now);
+      if (screens[PG_NOW]) renderNowTime(now);
+      renderAgenda(now);  // no-op unless the agenda page exists
     }
     renderStatusTime(now);
   }
@@ -1809,7 +1840,7 @@ static void refreshKumaInPlace() {
   snap.health = gData.health;
   seenVersion = gData.version;
   model_unlock();
-  renderHealth();
+  if (screens[PG_HEALTH]) renderHealth();
   const HealthData& h = snap.health;
   if (h.count) {
     lv_label_set_text_fmt(hdHealth, "%s %d/%d", h.up == h.count ? LV_SYMBOL_OK : LV_SYMBOL_WARNING, h.up, h.count);
@@ -1857,11 +1888,12 @@ void ui_refresh(RefreshKind kind) {
   // Free every dashboard object so the HTTPS handshakes get the RAM.
   if (dashboardBuilt) {
     for (int i = 0; i < PG_COUNT; i++) {
-      lv_obj_delete(screens[i]);
+      if (screens[i]) lv_obj_delete(screens[i]);
       screens[i] = nullptr;
     }
-    agList = nullptr;
+    agList = cardList = hlGrid = nullptr;
     agLayout = -1;
+    cardRowsBuilt = hlTilesBuilt = 0;
     for (MeetSlot& m : agRows) m.box = nullptr;  // deleted with their screen
     dashboardBuilt = false;
   }
@@ -1898,6 +1930,7 @@ void ui_refresh(RefreshKind kind) {
   lastClock = 0;
   curStatus = effectiveStatus(time(nullptr));
   renderStatus(time(nullptr));
+  page = -1;  // nothing to free: the pages were deleted for the fetch
   showPage(curStatus != ST_NONE ? PG_STATUS : PG_NOW, false);
   refreshesDone++;
   LOG("refresh: done, loop stack left %u bytes", (unsigned)uxTaskGetStackHighWaterMark(nullptr));
