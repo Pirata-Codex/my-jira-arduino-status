@@ -37,8 +37,10 @@ boot ──► ARENA (72 KB, reserved before WiFi, while memory is still whole)
   20 KB chunk of its own. That's why fetches run with the dashboard freed.
 - With the dashboard on screen, a page may reach into chunk 1; a fetch then needs the heap's pieces
   for its buffers, and the admission check decides whether it can run.
-- mbedTLS is pointed at the arena with `mbedtls_platform_set_calloc_free` after WiFi is up (the
-  company WiFi login's own long-lived TLS state stays on the heap).
+- mbedTLS is pointed at the arena with `mbedtls_platform_set_calloc_free` as soon as the arena is
+  reserved, before WiFi starts: the company WiFi login (PEAP) runs a TLS session of its own with the
+  same two 17 KB buffers, and failed with "802.1X authentication failed" (reason 23) when it had to
+  find them on the heap next to the arena.
 
 ## The three mechanisms (`jira_status/memory.h`)
 

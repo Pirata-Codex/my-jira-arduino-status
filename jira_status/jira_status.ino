@@ -37,8 +37,8 @@ static void lvLog(lv_log_level_t level, const char* msg) { Serial.print("[lvgl] 
 // forgotten the password. The saved credentials are never erased here.
 static bool tryNormal(WiFiManager& wm) {
   if (!wm.getWiFiIsSaved()) return false;
+  WiFi.mode(WIFI_STA);  // first: the saved network name can only be read once WiFi is started
   String ssid = wm.getWiFiSSID(true);
-  WiFi.mode(WIFI_STA);
   for (int attempt = 1; attempt <= 2; attempt++) {
     ui_boot("Connecting to WiFi", ssid + (attempt > 1 ? " (retry)" : ""));
     LOG("normal wifi: %s, attempt %d", ssid.c_str(), attempt);

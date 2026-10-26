@@ -2,14 +2,11 @@
 #include <esp_heap_caps.h>
 #include <esp_timer.h>
 #include <Preferences.h>
-#include <mbedtls/platform.h>
 
 // The arena (lv_mem_pool.cpp).
 size_t lvgl_pool_free_bytes();
 size_t lvgl_used_bytes();
 int arena_slots(size_t bytes);
-void* arena_tls_calloc(size_t n, size_t size);
-void arena_tls_free(void* p);
 
 static const uint32_t HEAP_CAPS = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
 static const int TRUST_SAMPLES = 3;      // measured values replace the estimate after this many runs
@@ -85,9 +82,6 @@ void mem_reset_learned() {
 
 void mem_init() {
   load();
-  // From here on every TLS allocation tries the arena first (after WiFi: the company WiFi login
-  // also uses mbedTLS, and its long-lived state should stay on the heap).
-  mbedtls_platform_set_calloc_free(arena_tls_calloc, arena_tls_free);
   heap_caps_register_failed_alloc_callback(failedAllocCb);
   esp_timer_create_args_t a = {};
   a.callback = sampleCb;

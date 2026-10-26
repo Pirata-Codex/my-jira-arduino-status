@@ -13,7 +13,8 @@
 // During a refresh the dashboard is freed, so the screen holds only chunk 0 and each 17 KB TLS
 // buffer gets a 20 KB piece of its own. With the dashboard on screen the pages may reach into
 // chunk 1; HTTPS then takes what is left and falls back to the heap (memory.cpp decides whether a
-// fetch can run at all). Anything that doesn't fit the arena falls back to the normal heap, so a
+// fetch can run at all). The company WiFi login (PEAP) uses it the same way while it connects.
+// Anything that doesn't fit the arena falls back to the normal heap, so a
 // full arena costs fragmentation, never a crash.
 #include <Arduino.h>  // Serial, millis, ESP for LOG (a .cpp file doesn't get it automatically)
 #include <lvgl.h>
@@ -21,6 +22,10 @@
 #include <multi_heap.h>
 #include <string.h>
 #include "config.h"
+#include <mbedtls/platform.h>
+
+void* arena_tls_calloc(size_t n, size_t size);
+void arena_tls_free(void* p);
 
 #if LV_USE_STDLIB_MALLOC != LV_STDLIB_CUSTOM
 #error "Old lv_conf.h: copy extras/lv_conf.h next to the lvgl library folder again (it now sets LV_STDLIB_CUSTOM)."
@@ -78,6 +83,10 @@ void lv_mem_init(void) {
     chunkMem[chunkCount] = m;
     chunk[chunkCount++] = h;
   }
+  // Every TLS allocation tries the arena from here on, before WiFi starts: the company WiFi login
+  // (PEAP) runs a TLS session too, with the same two 17 KB buffers, and the heap left next to the
+  // arena is too small for them (authentication failed, reason 23).
+  if (chunkCount) mbedtls_platform_set_calloc_free(arena_tls_calloc, arena_tls_free);
   LOG("arena: %d chunks (32+20+20 KB), largest free block %u KB before, %u KB after", chunkCount,
       (unsigned)(before / 1024), (unsigned)(heap_caps_get_largest_free_block(CAPS) / 1024));
 }
@@ -172,7 +181,7 @@ lv_result_t lv_mem_test_core(void) { return LV_RESULT_OK; }
 
 }  // extern "C"
 
-// ----- mbedTLS side (installed by memory.cpp with mbedtls_platform_set_calloc_free) -----
+// ----- mbedTLS side (installed by lv_mem_init with mbedtls_platform_set_calloc_free) -----
 
 void* arena_tls_calloc(size_t n, size_t size) {
   size_t bytes = n * size;
