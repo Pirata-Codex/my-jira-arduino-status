@@ -24,15 +24,11 @@
 // the same path on this host over plain http ("" turns this off).
 #define ICS_LAN_HOST "10.20.36.36"
 
-// Kuma checks run with the dashboard on screen while at least this much heap is free (bytes);
-// otherwise the dashboard is freed first. A fetch that runs out of TLS memory restarts the board.
-#define KUMA_INPLACE_HEAP 60000
 // Presence status (Jira user property "friday.status" on your own account, written by your bot).
 #define STATUS_PROPERTY "friday.status"
 #define STATUS_POLL_MS (60 * 1000UL)
-#define STATUS_INPLACE_BLOCK 40000  // largest free block needed to check it with the dashboard on screen
-// LVGL's own memory region (lv_mem_pool.cpp). The full dashboard needs about 45 KB; anything beyond
-// the pool spills into the normal heap (logged as "overflow" in the heartbeat).
+// LVGL's own memory (lv_mem_pool.cpp), checked against the memory plan in memory.h. Anything beyond
+// it spills into the normal heap (logged as "overflow" in the heartbeat).
 #define LVGL_POOL_BYTES (56 * 1024)
 // Daily restart for a clean heap (local hour; -1 turns it off).
 #define NIGHTLY_RESTART_HOUR 4

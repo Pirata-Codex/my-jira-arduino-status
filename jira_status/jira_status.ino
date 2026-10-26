@@ -11,6 +11,7 @@
 #include "fetch.h"
 #include "web.h"
 #include "ui.h"
+#include "memory.h"
 
 #if !LV_USE_TFT_ESPI || !LV_USE_CHART || !LV_FONT_MONTSERRAT_48
 #error "LVGL is using another lv_conf.h. Copy extras/lv_conf.h over Documents/Arduino/libraries/lv_conf.h"
@@ -205,6 +206,7 @@ void setup() {
   }
 
   LOG("wifi ok, ip %s", WiFi.localIP().toString().c_str());
+  mem_init();
   configTzTime(TZ_INFO, NTP_1, NTP_2, NTP_3);
   web_begin();
 

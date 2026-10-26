@@ -31,6 +31,7 @@ static uint8_t* chunkMem[POOL_CHUNKS];
 static multi_heap_handle_t chunk[POOL_CHUNKS];
 static int chunkCount = 0;
 static size_t overflowAllocs = 0;  // allocations that didn't fit the pool (logged)
+static size_t overflowLive = 0;    // bytes of those still allocated (LVGL's use of the heap)
 
 static int chunkOf(const void* p) {
   for (int i = 0; i < chunkCount; i++)
@@ -80,21 +81,37 @@ void* lv_malloc_core(size_t size) {
     if (p) return p;
   }
   void* p = malloc(size);
-  if (p) overflowAllocs++;
+  if (p) {
+    overflowAllocs++;
+    overflowLive += heap_caps_get_allocated_size(p);
+  }
   return p;
 }
 
 void lv_free_core(void* p) {
   if (!p) return;
   int c = chunkOf(p);
-  if (c >= 0) multi_heap_free(chunk[c], p);
-  else free(p);
+  if (c >= 0) {
+    multi_heap_free(chunk[c], p);
+    return;
+  }
+  size_t n = heap_caps_get_allocated_size(p);
+  overflowLive = overflowLive > n ? overflowLive - n : 0;
+  free(p);
 }
 
 void* lv_realloc_core(void* p, size_t size) {
   if (!p) return lv_malloc_core(size);
   int c = chunkOf(p);
-  if (c < 0) return realloc(p, size);
+  if (c < 0) {
+    size_t before = heap_caps_get_allocated_size(p);
+    void* n = realloc(p, size);
+    if (n || !size) {
+      overflowLive = overflowLive > before ? overflowLive - before : 0;
+      if (n) overflowLive += heap_caps_get_allocated_size(n);
+    }
+    return n;
+  }
   void* n = multi_heap_realloc(chunk[c], p, size);
   if (n || !size) return n;
   // Doesn't fit in its chunk any more: move it (another chunk or the heap).
@@ -139,4 +156,17 @@ void lvgl_pool_stats(unsigned& usedKb, unsigned& peakKb, unsigned& overflow) {
   usedKb = (m.total_size - m.free_size) / 1024;
   peakKb = m.max_used / 1024;
   overflow = overflowAllocs;
+}
+
+// For the memory budget (memory.cpp).
+size_t lvgl_pool_free_bytes() {
+  lv_mem_monitor_t m;
+  lv_mem_monitor_core(&m);
+  return m.free_size;
+}
+
+size_t lvgl_used_bytes() {
+  lv_mem_monitor_t m;
+  lv_mem_monitor_core(&m);
+  return (m.total_size - m.free_size) + overflowLive;
 }

@@ -1,4 +1,5 @@
 #include "fetch.h"
+#include "memory.h"
 #include "config.h"
 #include "model.h"
 #include "settings.h"
@@ -980,13 +981,15 @@ static void fetchStatus(StatusData& st) {
 
 // Fills a fresh copy and swaps it in; on failure keeps the last good data and only records the error.
 template <typename T, typename Fn>
-static bool publish(const char* name, T Snapshot::*field, Fn fill, String& err) {
+static bool publish(const char* name, MemFeature mf, T Snapshot::*field, Fn fill, String& err) {
   LOG("fetch %s ...", name);
   uint32_t t0 = millis();
+  mem_begin(mf);  // measured from before the fresh copy: it is part of the fetch's cost
   T* fresh = new T();
   fill(*fresh);
   bool ok = fresh->ok;
   err = fresh->err;
+  mem_end(mf, ok, err);
   LOG("fetch %s %s in %lu ms %s", name, ok ? "ok" : "FAILED", millis() - t0, err.c_str());
   model_lock();
   if (ok || !(gData.*field).ok) gData.*field = *fresh;
@@ -1013,7 +1016,7 @@ void fetch_all(FetchProgress p, RefreshKind kind) {
   if (full) refreshNow = false;
   if (!settings_mock()) {
     // Status first: it is tiny, and with every refresh kind the board reflects it within a minute.
-    publish("status", &Snapshot::status, fetchStatus, err);
+    publish("status", MF_FETCH_STATUS, &Snapshot::status, fetchStatus, err);
     lastStatus = millis();
   }
   if (kind == REFRESH_STATUS) {
@@ -1048,17 +1051,17 @@ void fetch_all(FetchProgress p, RefreshKind kind) {
       report(STEP_CALENDAR, STEP_SKIP, "no .ics URL");
     } else {
       report(STEP_CALENDAR, STEP_RUN);
-      bool calOk = publish("calendar", &Snapshot::meet, fetchCalendar, err);
+      bool calOk = publish("calendar", MF_FETCH_CALENDAR, &Snapshot::meet, fetchCalendar, err);
       model_lock();
       String calSum = String(gData.meet.count) + " meetings today";
       model_unlock();
       report(STEP_CALENDAR, calOk ? STEP_OK : STEP_FAIL, calOk ? calSum : err);
     }
-    publish("jira", &Snapshot::sprint, fetchJira, err);
+    publish("jira", MF_FETCH_JIRA, &Snapshot::sprint, fetchJira, err);
   }
 
   report(STEP_KUMA, STEP_RUN);
-  bool ok = publish("kuma", &Snapshot::health, fetchKuma, err);
+  bool ok = publish("kuma", MF_FETCH_KUMA, &Snapshot::health, fetchKuma, err);
   model_lock();
   String kumaSum = String(gData.health.up) + " / " + String(gData.health.count) + " up";
   model_unlock();

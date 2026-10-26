@@ -105,7 +105,7 @@ Suggested bot commands: `/wfh [note]`, `/otw 09:40 [note]`, `/left [09:00]`, `/a
 - **Calendar:** reads the whole published `.ics`, expands repeating meetings for today (daily / weekly, interval, by-day, until, count), drops deleted occurrences and applies moved or cancelled ones. On the office network it falls back to the internal mail server when the public address is refused. It refreshes every 15 minutes, on boot and at midnight.
 - **Meeting place:** a room code like `5M3` or `BM4` from the location, title or description; otherwise a Google Meet or Skyroom link; otherwise the location text.
 - **Network:** saved WiFi first, then company WiFi (WPA2-Enterprise / PEAP), then its own setup hotspot. Time comes from the company domain controller, then public NTP.
-- **Memory:** the screen library has its own 48 KB region reserved at boot, so HTTPS keeps the large free block it needs. A refresh that still runs out of memory restarts the board cleanly, and it restarts itself every night at 04:00. The serial log prints free heap and largest block on every line.
+- **Memory:** every feature has a memory budget that is checked when you compile, measured on the board and checked again before it runs, so the board frees the screen, postpones or restarts instead of running out (see [docs/MEMORY.md](docs/MEMORY.md) and `/memory`). Only the page on screen exists; the screen library has its own pool, kept out of the big heap region HTTPS needs. The board also restarts itself every night at 04:00.
 
 ## ◢ Hardware
 
@@ -146,6 +146,7 @@ USB is needed **once**. After that, update over WiFi:
 |---|---|
 | `/` | settings |
 | `/refresh` | fetch everything now |
+| `/memory` | memory budget: estimate vs measured per feature, room right now |
 | `/screenshot` | the screen as a 480×320 BMP (redrawn once and streamed, no extra RAM) |
 | `/update` | firmware upload |
 

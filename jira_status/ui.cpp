@@ -5,6 +5,9 @@
 #include "settings.h"
 #include <WiFi.h>
 #include "fetch.h"
+#include "memory.h"
+
+static void freePageNow(int p);  // frees a dashboard page at once (defined with the page lifecycle)
 
 // F.R.I.D.A.Y. HUD look. Behavior (pages, rotation, refresh flow, alerts) is unchanged; drawing is kept
 // cheap for the ILI9488 (~10 full frames/s): outline-only panels, no shadows, only small areas animate.
@@ -1499,8 +1502,15 @@ static void renderStatus(time_t now) {
   navStep = -1;
   navFlash = false;
   if (curStatus == ST_NONE) { dropStatusScreen(); return; }
+  bool fresh = !stScreen || !stGroup[curStatus];
+  if (fresh) {
+    // No room in the pool: free the dashboard page first (the status screen replaces it anyway).
+    if (!mem_admit(MF_STATUS_SCREEN)) freePageNow(page);
+    mem_begin(MF_STATUS_SCREEN);
+  }
   if (!stScreen) buildStatus();
   useGroup(curStatus);
+  if (fresh) mem_end(MF_STATUS_SCREEN, true);
   const StatusData& s = snap.status;
   time_t since = s.since ? s.since : now;
   time_t eta = s.eta.length() ? clockTime(s.eta, since) : 0;
@@ -1717,7 +1727,11 @@ static void updateHeader(time_t now, const struct tm& lt) {
 
 // ---------- loop ----------
 
+static_assert(MF_PAGE_HEALTH - MF_PAGE_NOW == PG_HEALTH - PG_NOW, "memory.h page features must follow enum Page");
+static MemFeature pageFeature(int p) { return (MemFeature)(MF_PAGE_NOW + p); }  // same order as Page
+
 static void buildPage(int p, time_t now) {
+  mem_begin(pageFeature(p));
   switch (p) {
     case PG_NOW: buildNow(); renderNow(now); break;
     case PG_AGENDA: buildAgenda(); renderAgenda(now); break;
@@ -1726,13 +1740,11 @@ static void buildPage(int p, time_t now) {
     case PG_KPI: buildKpi(); renderKpi(); break;
     default: buildHealth(); renderHealth(); break;
   }
+  mem_end(pageFeature(p), true);
 }
 
 // Frees page p (after the slide animation, which still draws it) and forgets its slots.
-static void dropPage(int p) {
-  if (p < 0 || p >= PG_COUNT || !screens[p]) return;
-  lv_obj_delete_delayed(screens[p], 400);
-  screens[p] = nullptr;
+static void forgetPageSlots(int p) {
   if (p == PG_AGENDA) {
     agList = nullptr;
     agLayout = -1;
@@ -1746,11 +1758,36 @@ static void dropPage(int p) {
   }
 }
 
+// Frees page p now, without a slide: used when the pool has no room for the next page next to it.
+// The refresh screen stands in for a moment (nothing is drawn before the next page is loaded).
+static void freePageNow(int p) {
+  if (p < 0 || p >= PG_COUNT || !screens[p]) return;
+  if (lv_screen_active() == screens[p]) lv_screen_load(loadScreen);
+  lv_obj_delete(screens[p]);
+  screens[p] = nullptr;
+  forgetPageSlots(p);
+}
+
+static void dropPage(int p) {
+  if (p < 0 || p >= PG_COUNT || !screens[p]) return;
+  lv_obj_delete_delayed(screens[p], 400);
+  screens[p] = nullptr;
+  forgetPageSlots(p);
+}
+
+
 // The ILI9488 over SPI does ~10 full frames/s, so the slide is short: a quick swipe, not a slow judder.
 static void showPage(int p, bool animate) {
   LOG("page %s", p == PG_STATUS ? "STATUS" : PAGE_TITLES[p]);
   int old = page;
-  if (p != PG_STATUS && !screens[p]) buildPage(p, time(nullptr));
+  if (p != PG_STATUS && !screens[p]) {
+    // The slide needs the old and the new page at once; without room for both, free the old one first.
+    if (old != p && !mem_admit(pageFeature(p))) {
+      freePageNow(old);
+      animate = false;
+    }
+    buildPage(p, time(nullptr));
+  }
   page = p;
   lv_obj_t* scr = p == PG_STATUS ? stScreen : screens[p];
   lv_screen_load_anim(scr, animate ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_NONE, animate ? 250 : 0, 0, false);
@@ -1861,9 +1898,7 @@ static void restartFor(const char* why) {
 }
 
 // Any fetch that ran out of TLS memory (mbedTLS: "Memory allocation failed", ours: "no memory").
-static bool memoryError(const String& e) {
-  return e.indexOf("llocation") >= 0 || e.indexOf("memory") >= 0;
-}
+static bool memoryError(const String& e) { return mem_is_oom(e); }
 
 // Kuma check with the dashboard kept on screen: only the health data is copied and redrawn.
 static void refreshKumaInPlace() {
@@ -1884,8 +1919,7 @@ static void refreshKumaInPlace() {
 
 // Status check with the dashboard kept on screen (every minute).
 static void refreshStatusInPlace() {
-  if (ESP.getMaxAllocHeap() < STATUS_INPLACE_BLOCK) {
-    LOG("status: skipped, largest block %uk", (unsigned)(ESP.getMaxAllocHeap() / 1024));
+  if (!mem_admit(MF_FETCH_STATUS)) {  // checked again with the next refresh (dashboard freed)
     fetch_status_postpone();
     return;
   }
@@ -1906,7 +1940,7 @@ void ui_refresh(RefreshKind kind) {
     else fetch_status_postpone();
     return;
   }
-  if (kind == REFRESH_KUMA && dashboardBuilt && ESP.getFreeHeap() >= KUMA_INPLACE_HEAP) {
+  if (kind == REFRESH_KUMA && dashboardBuilt && mem_admit(MF_FETCH_STATUS) && mem_admit(MF_FETCH_KUMA)) {
     refreshKumaInPlace();
     return;
   }
@@ -1940,6 +1974,11 @@ void ui_refresh(RefreshKind kind) {
   snap = Snapshot();
   lv_refr_now(nullptr);
   LOG("refresh: dashboard freed");
+  // With the dashboard gone the heaviest fetch of this refresh must fit. If it doesn't, the heap is
+  // too fragmented to recover without a restart (skipped on the first refresh after boot).
+  MemFeature heaviest = kind == REFRESH_FULL ? (mem_need(MF_FETCH_JIRA) > mem_need(MF_FETCH_CALENDAR) ? MF_FETCH_JIRA : MF_FETCH_CALENDAR)
+                                             : MF_FETCH_KUMA;
+  if (!mem_admit(heaviest)) restartFor("no room for HTTPS even with the dashboard freed");
 
   fetch_all(onProgress, kind);
   model_lock();
@@ -1967,5 +2006,6 @@ void ui_refresh(RefreshKind kind) {
   page = -1;  // nothing to free: the pages were deleted for the fetch
   showPage(curStatus != ST_NONE ? PG_STATUS : PG_NOW, false);
   refreshesDone++;
+  mem_save();  // learned memory use, written only when it changed notably
   LOG("refresh: done, loop stack left %u bytes", (unsigned)uxTaskGetStackHighWaterMark(nullptr));
 }

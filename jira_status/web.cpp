@@ -4,6 +4,7 @@
 #include "fetch.h"
 #include "model.h"
 #include "ui.h"
+#include "memory.h"
 #include <lvgl.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -157,6 +158,18 @@ void web_begin() {
     fetch_request_refresh();
     server.sendHeader("Location", "/");
     server.send(303);
+  });
+  server.on("/memory", HTTP_GET, [] {
+    if (!auth()) return;
+    if (server.hasArg("reset")) {
+      mem_reset_learned();
+      server.sendHeader("Location", "/memory");
+      server.send(303);
+      return;
+    }
+    server.send(200, "text/html", "<meta name=viewport content='width=device-width'><style>body{font-family:sans-serif;margin:16px}"
+                "td,th{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left}</style>" + mem_report_html() +
+                "<p><a href='/'>Settings</a></p>");
   });
   server.on("/screenshot", HTTP_GET, [] {
     if (!auth()) return;
