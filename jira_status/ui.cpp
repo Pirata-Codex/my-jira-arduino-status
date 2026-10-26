@@ -387,11 +387,11 @@ static void buildHeader() {
   lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
   lv_anim_start(&a);
   hdPhrase = text(header, F_HUD, C_ICE, "");
-  lv_obj_set_width(hdPhrase, 160);
+  lv_obj_set_size(hdPhrase, 150, 16);  // one line: long phrases end in "..." instead of wrapping
   lv_label_set_long_mode(hdPhrase, LV_LABEL_LONG_DOT);
   lv_obj_set_pos(hdPhrase, 178, 9);
   hdHealth = hudText(header, F_HUD, C_LIME, "");
-  lv_obj_set_pos(hdHealth, 344, 9);
+  lv_obj_align(hdHealth, LV_ALIGN_RIGHT_MID, -88, 0);  // right edge at x 384, before the WiFi bars
   // WiFi bars sit in their own gap between the health count and the clock (clock starts ~x 414).
   for (int i = 0; i < 4; i++) hdWifi[i] = rect(header, 390 + i * 5, 24 - (4 + i * 3), 3, 4 + i * 3, C_DIM);
   hdClock = hudText(header, F_HUD_M, C_TEXT, "--:--");
@@ -1098,34 +1098,14 @@ static uint32_t stShownAt = 0;  // when the current status was first drawn (typi
 static lv_obj_t *stScreen, *stBody, *stTitle, *stSub, *stExtra, *stNote, *stSince;
 static lv_obj_t* stGroup[5];  // per-status parts (index = ST_*)
 static String stTitleText;
-// WFH and AWAY use spinning arcs like the boot reactor: LVGL rotates them itself (lv_anim), the
-// smoothest motion this panel does. Only small parts (blips, bars, core) change in the timer.
-constexpr int BLIPS = 4;
-static lv_obj_t *rdBlip[BLIPS], *rdBar[5], *rdUplink;
-// Flip-frame motion ("lenticular ruler"): instead of turning every refresh, the rings jump to the
-// next position FLIP_FPS times a second, all together, so the panel redraws the emblem once per
-// frame instead of continuously. Each ring has its own step (degrees per frame, negative = back).
-constexpr int FLIP_FPS = 8, MAX_FLIP = 5;
-static lv_obj_t* flipArc[MAX_FLIP];
-static int flipStep[MAX_FLIP], flipCount = 0, flipFrame = -1;
-static const int RD_SWEEP_STEP = 30;  // radar sweep: degrees per frame (a turn in 1.5 s)
-
-static void flipRing(lv_obj_t* arc, int degPerFrame) {
-  if (flipCount < MAX_FLIP) {
-    flipArc[flipCount] = arc;
-    flipStep[flipCount++] = degPerFrame;
-  }
-}
-
-// Advances the flip frame; true when it changed (the caller redraws its frame-based parts then).
-static bool flipTick(float t) {
-  int k = (int)(t * FLIP_FPS);
-  if (k == flipFrame) return false;
-  flipFrame = k;
-  for (int i = 0; i < flipCount; i++) lv_arc_set_rotation(flipArc[i], ((k * flipStep[i]) % 360 + 360) % 360);
-  return true;
-}
-static const int blipDeg[BLIPS] = {45, 150, 235, 305};
+// WFH and AWAY: the rings stay still and small glowing dots with short trails orbit them. Each
+// frame only a few 10 px dots move, so LVGL animates them every refresh (smooth); turning a whole
+// 150 px ring redraws the emblem every frame, which this SPI panel can't keep up with.
+static lv_obj_t *rdBar[5], *rdUplink;
+struct Orbiter { lv_obj_t* d[3]; int r; };  // head + two trail dots
+constexpr int MAX_ORBITERS = 4;
+static Orbiter orbs[MAX_ORBITERS];
+static int orbCount = 0;
 // ON THE WAY
 constexpr int ROUTE_N = 31;
 static lv_point_precise_t routePts[ROUTE_N];
@@ -1135,6 +1115,7 @@ static lv_obj_t* nvHqLine;
 static lv_obj_t *lfRingA, *lfRingB, *lfCore, *lfScan, *lfOuter;
 // AWAY
 static lv_obj_t *awCore, *awStripes;
+
 
 static const int SCX = 99, SCY = 158;  // emblem center
 
@@ -1190,6 +1171,43 @@ static void placeDot(lv_obj_t* d, int cx, int cy, int r) {
 
 static lv_point_precise_t P(float x, float y) { return {(lv_value_precise_t)x, (lv_value_precise_t)y}; }
 
+// v = angle in tenths of a degree.
+static void orbitCb(void* var, int32_t v) {
+  Orbiter* o = (Orbiter*)var;
+  float a = v * PI / 1800;
+  for (int j = 0; j < 3; j++) {
+    float aj = a - j * 0.16f;
+    placeDot(o->d[j], SCX + o->r * cosf(aj), SCY + o->r * sinf(aj), 5 - j);
+  }
+}
+
+static void addOrbiter(lv_obj_t* g, int r, lv_color_t c, uint32_t msPerTurn, bool reverse, int startDeg) {
+  if (orbCount >= MAX_ORBITERS) return;
+  Orbiter& o = orbs[orbCount++];
+  o.r = r;
+  static const lv_opa_t opa[] = {LV_OPA_COVER, LV_OPA_50, LV_OPA_20};
+  for (int j = 2; j >= 0; j--) {  // head created last, drawn on top
+    o.d[j] = dot(g, SCX + r, SCY, 5 - j, c);
+    lv_obj_set_style_bg_opa(o.d[j], opa[j], 0);
+  }
+  lv_anim_t a;
+  lv_anim_init(&a);
+  lv_anim_set_var(&a, &o);
+  lv_anim_set_exec_cb(&a, orbitCb);
+  int from = startDeg * 10, to = from + (reverse ? -3600 : 3600);
+  lv_anim_set_values(&a, from, to);
+  lv_anim_set_duration(&a, msPerTurn);
+  lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+  lv_anim_set_path_cb(&a, lv_anim_path_linear);
+  lv_anim_start(&a);
+}
+
+// Orbiters' animations point at orbs[], not at LVGL objects, so they are stopped by hand.
+static void stopOrbiters() {
+  for (int i = 0; i < orbCount; i++) lv_anim_delete(&orbs[i], nullptr);
+  orbCount = 0;
+}
+
 // A line whose points live in the caller's static array (updated in place each frame).
 static lv_obj_t* liveLine(lv_obj_t* parent, lv_point_precise_t* pts, int n, lv_color_t c, int w) {
   lv_obj_t* l = lv_line_create(parent);
@@ -1207,24 +1225,18 @@ static lv_obj_t* group(lv_obj_t* parent) {
   return g;
 }
 
-// WFH: a cyan reactor with a radar sweep on its outer ring; blips light up as the sweep passes.
+// WFH "uplink": still cyan rings, two satellites orbiting in opposite directions, signal bars.
 static void buildRadar(lv_obj_t* g) {
   arcRing(g, SCX - 75, SCY - 75, 150, 2, C_DIM, true);
-  lv_obj_t* sweep = arcRing(g, SCX - 75, SCY - 75, 150, 4, C_CYAN, false);
-  lv_arc_set_angles(sweep, 0, 40);
-  lv_obj_t* mid = arcRing(g, SCX - 58, SCY - 58, 116, 8, C_CYAN, false);
-  lv_arc_set_angles(mid, 0, 270);
-  lv_obj_t* in = arcRing(g, SCX - 40, SCY - 40, 80, 4, C_ICE, false);
-  lv_arc_set_angles(in, 0, 120);
+  lv_obj_t* outer = arcRing(g, SCX - 66, SCY - 66, 132, 2, C_CYAN, true);
+  lv_obj_set_style_arc_opa(outer, LV_OPA_30, LV_PART_MAIN);
+  lv_obj_t* mid = arcRing(g, SCX - 52, SCY - 52, 104, 6, C_CYAN, false);
+  lv_arc_set_angles(mid, 200, 110);  // a 270 deg bracket, open at the bottom right
+  lv_obj_t* in = arcRing(g, SCX - 36, SCY - 36, 72, 3, C_ICE, false);
+  lv_arc_set_angles(in, 20, 160);
   dot(g, SCX, SCY, 15, C_CYAN);
-  for (int i = 0; i < BLIPS; i++) {
-    float a = blipDeg[i] * PI / 180;
-    rdBlip[i] = dot(g, SCX + 66 * cosf(a), SCY + 66 * sinf(a), 4, C_LIME);
-    lv_obj_set_style_opa(rdBlip[i], LV_OPA_TRANSP, 0);
-  }
-  flipRing(sweep, RD_SWEEP_STEP);
-  flipRing(mid, 15);
-  flipRing(in, -30);
+  addOrbiter(g, 66, C_CYAN, 3200, false, 0);
+  addOrbiter(g, 44, C_LIME, 4800, true, 180);
   for (int i = 0; i < 5; i++) rdBar[i] = rect(g, 196 + i * 12, 200 - (8 + i * 7), 8, 8 + i * 7, C_DIM);
   rdUplink = hudText(g, F_HUD, C_LIME, "UPLINK ACTIVE");
   lv_obj_set_pos(rdUplink, 262, 186);
@@ -1269,22 +1281,22 @@ static void buildShutdown(lv_obj_t* g) {
   lv_obj_set_style_bg_opa(lfScan, LV_OPA_40, 0);
 }
 
-// AWAY: a red reactor in lockdown: three shield segments turning together, an inner ring the
-// other way, a breathing "no entry" core and moving hazard tape.
+// AWAY "lockdown": a still red shield of three segments; two red sentries patrol its ring, an
+// amber one the inner ring the other way; breathing "no entry" core; hazard tape.
 static void buildLockdown(lv_obj_t* g) {
   arcRing(g, SCX - 75, SCY - 75, 150, 2, C_DIM, true);
   for (int i = 0; i < 3; i++) {
-    lv_obj_t* seg = arcRing(g, SCX - 70, SCY - 70, 140, 7, C_RED, false);
-    lv_arc_set_angles(seg, i * 120, i * 120 + 75);
-    flipRing(seg, 10);
+    lv_obj_t* seg = arcRing(g, SCX - 62, SCY - 62, 124, 6, C_RED, false);
+    lv_arc_set_angles(seg, i * 120 + 15, i * 120 + 95);
   }
-  lv_obj_t* in = arcRing(g, SCX - 48, SCY - 48, 96, 3, C_RED, false);
-  lv_arc_set_angles(in, 0, 200);
-  lv_obj_set_style_arc_opa(in, LV_OPA_60, LV_PART_INDICATOR);
-  flipRing(in, -20);
+  lv_obj_t* in = arcRing(g, SCX - 44, SCY - 44, 88, 2, C_RED, true);
+  lv_obj_set_style_arc_opa(in, LV_OPA_40, LV_PART_MAIN);
+  addOrbiter(g, 72, C_RED, 4000, false, 0);
+  addOrbiter(g, 72, C_RED, 4000, false, 180);
+  addOrbiter(g, 44, C_AMBER, 3000, true, 90);
   awCore = dot(g, SCX, SCY, 20, C_RED);
   rect(awCore, 11, 18, 18, 4, C_BG);  // "no entry" bar
-  // Hazard tape: slanted stripes in a clipped strip, stepped along.
+  // Hazard tape: slanted stripes in a clipped strip, sliding along.
   lv_obj_t* strip = plain(g, 196, 250, 264, 16);
   awStripes = plain(strip, -20, 0, 304, 16);
   static lv_point_precise_t stripe[2] = {{0, 16}, {10, 0}};
@@ -1321,16 +1333,9 @@ static float wayProgress(time_t now) {
 }
 
 static void frameRadar(float t) {
-  if (!flipTick(t)) return;
-  // Leading edge of the sweep (arc 0..40 deg); blips glow after it passes, in 3 steps.
-  int lead = (flipFrame * RD_SWEEP_STEP + 40) % 360;
-  for (int i = 0; i < BLIPS; i++) {
-    int d = (lead - blipDeg[i] + 360) % 360;  // degrees since the sweep passed
-    lv_obj_set_style_opa(rdBlip[i], d < 60 ? LV_OPA_COVER : d < 120 ? LV_OPA_60 : d < 180 ? LV_OPA_20 : LV_OPA_TRANSP, 0);
-  }
-  int lit = (flipFrame / 2) % 6;
+  int lit = ((int)(t * 4)) % 6;
   for (int i = 0; i < 5; i++) lv_obj_set_style_bg_color(rdBar[i], i < lit ? C_CYAN : C_DIM, 0);
-  if ((flipFrame / 4) % 2) lv_obj_remove_flag(rdUplink, LV_OBJ_FLAG_HIDDEN);
+  if (((int)(t * 2)) % 2) lv_obj_remove_flag(rdUplink, LV_OBJ_FLAG_HIDDEN);
   else lv_obj_add_flag(rdUplink, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -1373,11 +1378,9 @@ static void frameShutdown(float t) {
 }
 
 static void frameLockdown(float t) {
-  if (!flipTick(t)) return;
-  static const lv_opa_t breath[] = {LV_OPA_40, LV_OPA_60, LV_OPA_80, LV_OPA_COVER, LV_OPA_80, LV_OPA_60};
-  lv_obj_set_style_opa(awCore, breath[flipFrame % 6], 0);
-  lv_obj_set_x(awStripes, -20 + (flipFrame % 5) * 4);
-  if ((flipFrame / 5) % 2) lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_set_style_opa(awCore, 110 + (int)(145 * fabsf(sinf(t * 1.8f))), 0);
+  lv_obj_set_x(awStripes, -20 + (int)(t * 24) % 20);
+  if (((int)(t * 1.5f)) % 2) lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
   else lv_obj_add_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -1418,6 +1421,7 @@ static void buildStatus() {
 }
 
 static void dropStatusScreen() {
+  stopOrbiters();
   if (!stScreen) return;
   lv_obj_delete_async(stScreen);
   stScreen = nullptr;
@@ -1426,11 +1430,11 @@ static void dropStatusScreen() {
 
 // Builds the parts of status k (first in front of the texts) and deletes the other statuses' parts.
 static void useGroup(int k) {
+  if (!stGroup[k]) stopOrbiters();  // the orbiters belong to the group being replaced
   for (int i = ST_WFH; i <= ST_AWAY; i++)
     if (i != k && stGroup[i]) { lv_obj_delete(stGroup[i]); stGroup[i] = nullptr; }
   if (stGroup[k]) return;
-  flipCount = 0;
-  flipFrame = -1;
+  stopOrbiters();
   lv_obj_t* g = stGroup[k] = group(stBody);
   lv_obj_move_to_index(g, 0);
   if (k == ST_WFH) buildRadar(g);
@@ -1901,6 +1905,7 @@ void ui_refresh(RefreshKind kind) {
     dashboardBuilt = false;
   }
   if (stScreen) {  // rebuilt after the fetch if a status is still set
+    stopOrbiters();
     lv_obj_delete(stScreen);
     stScreen = nullptr;
     for (lv_obj_t*& g : stGroup) g = nullptr;
