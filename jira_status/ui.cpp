@@ -1102,8 +1102,29 @@ static String stTitleText;
 // smoothest motion this panel does. Only small parts (blips, bars, core) change in the timer.
 constexpr int BLIPS = 4;
 static lv_obj_t *rdBlip[BLIPS], *rdBar[5], *rdUplink;
-static uint32_t rdSweepStart;
-static const int RD_SWEEP_MS = 2600;
+// Flip-frame motion ("lenticular ruler"): instead of turning every refresh, the rings jump to the
+// next position FLIP_FPS times a second, all together, so the panel redraws the emblem once per
+// frame instead of continuously. Each ring has its own step (degrees per frame, negative = back).
+constexpr int FLIP_FPS = 8, MAX_FLIP = 5;
+static lv_obj_t* flipArc[MAX_FLIP];
+static int flipStep[MAX_FLIP], flipCount = 0, flipFrame = -1;
+static const int RD_SWEEP_STEP = 30;  // radar sweep: degrees per frame (a turn in 1.5 s)
+
+static void flipRing(lv_obj_t* arc, int degPerFrame) {
+  if (flipCount < MAX_FLIP) {
+    flipArc[flipCount] = arc;
+    flipStep[flipCount++] = degPerFrame;
+  }
+}
+
+// Advances the flip frame; true when it changed (the caller redraws its frame-based parts then).
+static bool flipTick(float t) {
+  int k = (int)(t * FLIP_FPS);
+  if (k == flipFrame) return false;
+  flipFrame = k;
+  for (int i = 0; i < flipCount; i++) lv_arc_set_rotation(flipArc[i], ((k * flipStep[i]) % 360 + 360) % 360);
+  return true;
+}
 static const int blipDeg[BLIPS] = {45, 150, 235, 305};
 // ON THE WAY
 constexpr int ROUTE_N = 31;
@@ -1201,10 +1222,9 @@ static void buildRadar(lv_obj_t* g) {
     rdBlip[i] = dot(g, SCX + 66 * cosf(a), SCY + 66 * sinf(a), 4, C_LIME);
     lv_obj_set_style_opa(rdBlip[i], LV_OPA_TRANSP, 0);
   }
-  spin(sweep, RD_SWEEP_MS, false);
-  spin(mid, 3000, false);
-  spin(in, 2000, true);
-  rdSweepStart = millis();
+  flipRing(sweep, RD_SWEEP_STEP);
+  flipRing(mid, 15);
+  flipRing(in, -30);
   for (int i = 0; i < 5; i++) rdBar[i] = rect(g, 196 + i * 12, 200 - (8 + i * 7), 8, 8 + i * 7, C_DIM);
   rdUplink = hudText(g, F_HUD, C_LIME, "UPLINK ACTIVE");
   lv_obj_set_pos(rdUplink, 262, 186);
@@ -1256,12 +1276,12 @@ static void buildLockdown(lv_obj_t* g) {
   for (int i = 0; i < 3; i++) {
     lv_obj_t* seg = arcRing(g, SCX - 70, SCY - 70, 140, 7, C_RED, false);
     lv_arc_set_angles(seg, i * 120, i * 120 + 75);
-    spin(seg, 4000, false);
+    flipRing(seg, 10);
   }
   lv_obj_t* in = arcRing(g, SCX - 48, SCY - 48, 96, 3, C_RED, false);
   lv_arc_set_angles(in, 0, 200);
   lv_obj_set_style_arc_opa(in, LV_OPA_60, LV_PART_INDICATOR);
-  spin(in, 2200, true);
+  flipRing(in, -20);
   awCore = dot(g, SCX, SCY, 20, C_RED);
   rect(awCore, 11, 18, 18, 4, C_BG);  // "no entry" bar
   // Hazard tape: slanted stripes in a clipped strip, stepped along.
@@ -1301,15 +1321,16 @@ static float wayProgress(time_t now) {
 }
 
 static void frameRadar(float t) {
-  // Leading edge of the sweep (arc 0..40 deg, rotated by spin()).
-  float lead = fmodf((millis() - rdSweepStart) * 360.0f / RD_SWEEP_MS + 40, 360);
+  if (!flipTick(t)) return;
+  // Leading edge of the sweep (arc 0..40 deg); blips glow after it passes, in 3 steps.
+  int lead = (flipFrame * RD_SWEEP_STEP + 40) % 360;
   for (int i = 0; i < BLIPS; i++) {
-    float d = fmodf(lead - blipDeg[i] + 360, 360);  // degrees since the sweep passed
-    lv_obj_set_style_opa(rdBlip[i], d < 200 ? (lv_opa_t)(255 * (1 - d / 200)) : LV_OPA_TRANSP, 0);
+    int d = (lead - blipDeg[i] + 360) % 360;  // degrees since the sweep passed
+    lv_obj_set_style_opa(rdBlip[i], d < 60 ? LV_OPA_COVER : d < 120 ? LV_OPA_60 : d < 180 ? LV_OPA_20 : LV_OPA_TRANSP, 0);
   }
-  int lit = ((int)(t * 4)) % 6;
+  int lit = (flipFrame / 2) % 6;
   for (int i = 0; i < 5; i++) lv_obj_set_style_bg_color(rdBar[i], i < lit ? C_CYAN : C_DIM, 0);
-  if (((int)(t * 2)) % 2) lv_obj_remove_flag(rdUplink, LV_OBJ_FLAG_HIDDEN);
+  if ((flipFrame / 4) % 2) lv_obj_remove_flag(rdUplink, LV_OBJ_FLAG_HIDDEN);
   else lv_obj_add_flag(rdUplink, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -1352,9 +1373,11 @@ static void frameShutdown(float t) {
 }
 
 static void frameLockdown(float t) {
-  lv_obj_set_style_opa(awCore, 100 + (int)(155 * fabsf(sinf(t * 2.6f))), 0);
-  lv_obj_set_x(awStripes, -20 + ((int)(t * 10) % 5) * 4);  // 4 px steps, 10 per second
-  if (((int)(t * 1.5f)) % 2) lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
+  if (!flipTick(t)) return;
+  static const lv_opa_t breath[] = {LV_OPA_40, LV_OPA_60, LV_OPA_80, LV_OPA_COVER, LV_OPA_80, LV_OPA_60};
+  lv_obj_set_style_opa(awCore, breath[flipFrame % 6], 0);
+  lv_obj_set_x(awStripes, -20 + (flipFrame % 5) * 4);
+  if ((flipFrame / 5) % 2) lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
   else lv_obj_add_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -1406,6 +1429,8 @@ static void useGroup(int k) {
   for (int i = ST_WFH; i <= ST_AWAY; i++)
     if (i != k && stGroup[i]) { lv_obj_delete(stGroup[i]); stGroup[i] = nullptr; }
   if (stGroup[k]) return;
+  flipCount = 0;
+  flipFrame = -1;
   lv_obj_t* g = stGroup[k] = group(stBody);
   lv_obj_move_to_index(g, 0);
   if (k == ST_WFH) buildRadar(g);
