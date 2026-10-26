@@ -8,6 +8,7 @@
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
 #include <algorithm>
+#include <utility>
 
 static volatile bool refreshNow = true;
 static uint32_t lastFetch = 0, lastKuma = 0, lastStatus = 0;
@@ -992,7 +993,8 @@ static bool publish(const char* name, MemFeature mf, T Snapshot::*field, Fn fill
   mem_end(mf, ok, err);
   LOG("fetch %s %s in %lu ms %s", name, ok ? "ok" : "FAILED", millis() - t0, err.c_str());
   model_lock();
-  if (ok || !(gData.*field).ok) gData.*field = *fresh;
+  // Moved, not copied: the old text is freed instead of briefly existing three times.
+  if (ok || !(gData.*field).ok) gData.*field = std::move(*fresh);
   else (gData.*field).err = fresh->err;
   gData.version++;
   model_unlock();

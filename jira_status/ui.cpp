@@ -20,7 +20,8 @@ static const int TAB_W = 472 / PG_COUNT;
 static Snapshot snap;                 // UI-side copy of gData
 static uint32_t seenVersion = UINT32_MAX;
 static lv_obj_t* screens[PG_COUNT];
-static lv_obj_t* bootScreen;
+static lv_obj_t* bootScreen;   // deleted after the first refresh
+static lv_obj_t* blankScreen;  // stands in for a moment while a screen is freed (one object)
 static lv_obj_t *bootTitle, *bootDetail;
 static int page = PG_NOW;
 static uint32_t lastSwitch = 0, lastClock = 0;
@@ -640,8 +641,9 @@ void ui_init() {
   lv_label_set_long_mode(bootDetail, LV_LABEL_LONG_WRAP);
   lv_obj_align(bootDetail, LV_ALIGN_TOP_MID, 0, 214);
   lv_screen_load(bootScreen);
+  blankScreen = newScreen();
 
-  buildLoading();
+  // The refresh screen is built by ui_refresh when it is needed, after the dashboard is freed.
   buildHeader();
   buildTabBar();
   buildBanner();
@@ -657,6 +659,7 @@ static void buildDashboard() {
 }
 
 void ui_boot(const String& title, const String& detail) {
+  if (!bootScreen) return;  // only before the first refresh
   String t = title;
   t.toUpperCase();
   lv_label_set_text(bootTitle, t.c_str());
@@ -1762,7 +1765,7 @@ static void forgetPageSlots(int p) {
 // The refresh screen stands in for a moment (nothing is drawn before the next page is loaded).
 static void freePageNow(int p) {
   if (p < 0 || p >= PG_COUNT || !screens[p]) return;
-  if (lv_screen_active() == screens[p]) lv_screen_load(loadScreen);
+  if (lv_screen_active() == screens[p]) lv_screen_load(blankScreen);
   lv_obj_delete(screens[p]);
   screens[p] = nullptr;
   forgetPageSlots(p);
@@ -1783,11 +1786,17 @@ static void showPage(int p, bool animate) {
   if (p != PG_STATUS && !screens[p]) {
     // The slide needs the old and the new page at once; without room for both, free the old one first.
     if (old != p && !mem_admit(pageFeature(p))) {
-      freePageNow(old);
+      if (old == PG_STATUS) {  // the status screen is rebuilt when it comes back
+        lv_screen_load(blankScreen);
+        dropStatusScreen();
+      } else {
+        freePageNow(old);
+      }
       animate = false;
     }
     buildPage(p, time(nullptr));
   }
+  if (p == PG_STATUS && !stScreen) renderStatus(time(nullptr));  // freed while HEALTH was shown
   page = p;
   lv_obj_t* scr = p == PG_STATUS ? stScreen : screens[p];
   lv_screen_load_anim(scr, animate ? LV_SCR_LOAD_ANIM_MOVE_LEFT : LV_SCR_LOAD_ANIM_NONE, animate ? 250 : 0, 0, false);
@@ -1949,9 +1958,11 @@ void ui_refresh(RefreshKind kind) {
   styleBanner(BN_NONE);
   lv_obj_add_flag(header, LV_OBJ_FLAG_HIDDEN);
   lv_obj_add_flag(tabBar, LV_OBJ_FLAG_HIDDEN);
-  lv_label_set_text(loadTitle, kind == REFRESH_FULL ? "SYNCING DATA" : "CHECKING SERVICES");
-  for (int i = 0; i < STEP_COUNT; i++) onProgress((FetchStep)i, STEP_WAIT, "");
-  lv_screen_load(loadScreen);
+  lv_screen_load(blankScreen);
+  if (bootScreen) {  // first refresh: the boot screen is done
+    lv_obj_delete(bootScreen);
+    bootScreen = nullptr;
+  }
   // Free every dashboard object so the HTTPS handshakes get the RAM.
   if (dashboardBuilt) {
     for (int i = 0; i < PG_COUNT; i++) {
@@ -1972,6 +1983,10 @@ void ui_refresh(RefreshKind kind) {
   }
   // The UI copy of the data is rebuilt after the fetch; free its strings now as well.
   snap = Snapshot();
+  buildLoading();
+  lv_label_set_text(loadTitle, kind == REFRESH_FULL ? "SYNCING DATA" : "CHECKING SERVICES");
+  for (int i = 0; i < STEP_COUNT; i++) onProgress((FetchStep)i, STEP_WAIT, "");
+  lv_screen_load(loadScreen);
   lv_refr_now(nullptr);
   LOG("refresh: dashboard freed");
   // With the dashboard gone the heaviest fetch of this refresh must fit. If it doesn't, the heap is
@@ -2005,6 +2020,9 @@ void ui_refresh(RefreshKind kind) {
   renderStatus(time(nullptr));
   page = -1;  // nothing to free: the pages were deleted for the fetch
   showPage(curStatus != ST_NONE ? PG_STATUS : PG_NOW, false);
+  // The refresh and boot screens are no longer shown: give their memory back.
+  lv_obj_delete(loadScreen);  // not shown any more: give its memory back
+  loadScreen = nullptr;
   refreshesDone++;
   mem_save();  // learned memory use, written only when it changed notably
   LOG("refresh: done, loop stack left %u bytes", (unsigned)uxTaskGetStackHighWaterMark(nullptr));

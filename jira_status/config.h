@@ -1,4 +1,5 @@
 #pragma once
+#include <esp_heap_caps.h>  // LOG
 
 #define FRIDAY_VERSION "1.0.0"
 
@@ -27,9 +28,9 @@
 // Presence status (Jira user property "friday.status" on your own account, written by your bot).
 #define STATUS_PROPERTY "friday.status"
 #define STATUS_POLL_MS (60 * 1000UL)
-// LVGL's own memory (lv_mem_pool.cpp), checked against the memory plan in memory.h. Anything beyond
-// it spills into the normal heap (logged as "overflow" in the heartbeat).
-#define LVGL_POOL_BYTES (56 * 1024)
+// The memory arena (lv_mem_pool.cpp): reserved before WiFi, shared by the screen and the HTTPS
+// buffers, checked against the memory plan in memory.h.
+#define LVGL_POOL_BYTES (72 * 1024)
 // Daily restart for a clean heap (local hour; -1 turns it off).
 #define NIGHTLY_RESTART_HOUR 4
 
@@ -42,6 +43,8 @@
 // When today's meetings run out, the agenda shows the next ones from this many days ahead.
 #define AGENDA_AHEAD_DAYS 7
 
-// Serial log (115200 baud): timestamp, free heap and largest free block on every line.
+// Serial log (115200 baud): timestamp, free heap and largest free block on every line. Byte-addressable
+// RAM only: ESP.getFreeHeap() also counts ~36 KB of IRAM that neither LVGL nor TLS can use.
 #define LOG(fmt, ...) Serial.printf("[%7lu] heap %3uk blk %3uk | " fmt "\n", millis(), \
-    (unsigned)(ESP.getFreeHeap() / 1024), (unsigned)(ESP.getMaxAllocHeap() / 1024), ##__VA_ARGS__)
+    (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024), \
+    (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024), ##__VA_ARGS__)
