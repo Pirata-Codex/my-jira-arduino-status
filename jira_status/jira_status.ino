@@ -220,12 +220,42 @@ void setup() {
   ui_refresh();
 }
 
+// WiFi can drop while running (router restart, roaming, the company network kicking idle
+// clients); the ESP32 then sometimes stops trying (status 0, idle) and nothing is fetched any more.
+// Ask it to reconnect every 20 s; after 3 minutes without WiFi restart, which redoes the full
+// connect sequence (saved WiFi, company WiFi, hotspot).
+static void watchWifi() {
+  static uint32_t lostAt = 0, lastTry = 0;
+  if (WiFi.status() == WL_CONNECTED) {
+    if (lostAt) LOG("wifi back after %lu s", (millis() - lostAt) / 1000);
+    lostAt = 0;
+    return;
+  }
+  if (!lostAt) {
+    lostAt = lastTry = millis();
+    LOG("wifi lost (status %d)", (int)WiFi.status());
+    return;
+  }
+  if (millis() - lastTry >= 20000) {
+    lastTry = millis();
+    LOG("wifi: reconnecting (status %d)", (int)WiFi.status());
+    WiFi.reconnect();
+  }
+  if (millis() - lostAt >= 180000) {
+    LOG("restart: no wifi for 3 min");
+    Serial.flush();
+    delay(200);
+    ESP.restart();
+  }
+}
+
 void loop() {
   lv_timer_handler();
   ui_tick();
   web_loop();
   RefreshKind due = fetch_due();
   if (due != REFRESH_NONE) ui_refresh(due);
+  watchWifi();
   // Daily restart for a clean heap (skipped in the first hour after boot, so it runs once).
   if (NIGHTLY_RESTART_HOUR >= 0 && millis() > 3600000UL) {
     time_t now = time(nullptr);
