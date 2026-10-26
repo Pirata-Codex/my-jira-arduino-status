@@ -1098,12 +1098,13 @@ static uint32_t stShownAt = 0;  // when the current status was first drawn (typi
 static lv_obj_t *stScreen, *stBody, *stTitle, *stSub, *stExtra, *stNote, *stSince;
 static lv_obj_t* stGroup[5];  // per-status parts (index = ST_*)
 static String stTitleText;
-// WFH
-constexpr int BEAM_TRAIL = 4, BLIPS = 4;
-static lv_obj_t *rdBeam[BEAM_TRAIL], *rdBlip[BLIPS], *rdBar[5], *rdUplink;
-static lv_point_precise_t rdBeamPts[BEAM_TRAIL][2];
-static const float blipAng[BLIPS] = {0.8f, 2.6f, 4.1f, 5.3f};
-static const int blipR[BLIPS] = {40, 60, 30, 55};
+// WFH and AWAY use spinning arcs like the boot reactor: LVGL rotates them itself (lv_anim), the
+// smoothest motion this panel does. Only small parts (blips, bars, core) change in the timer.
+constexpr int BLIPS = 4;
+static lv_obj_t *rdBlip[BLIPS], *rdBar[5], *rdUplink;
+static uint32_t rdSweepStart;
+static const int RD_SWEEP_MS = 2600;
+static const int blipDeg[BLIPS] = {45, 150, 235, 305};
 // ON THE WAY
 constexpr int ROUTE_N = 31;
 static lv_point_precise_t routePts[ROUTE_N];
@@ -1112,10 +1113,7 @@ static lv_obj_t* nvHqLine;
 // LEFT
 static lv_obj_t *lfRingA, *lfRingB, *lfCore, *lfScan, *lfOuter;
 // AWAY
-// The shield stays still (a rotating 150 px hexagon redraws too much per frame on this panel);
-// two short lights chase around its edge instead, so each frame only redraws two small patches.
-static lv_obj_t *awRunner[2], *awCore, *awStripes;
-static lv_point_precise_t awOuterPts[7], awInnerPts[7], awRunPts[2][3];
+static lv_obj_t *awCore, *awStripes;
 
 static const int SCX = 99, SCY = 158;  // emblem center
 
@@ -1188,23 +1186,25 @@ static lv_obj_t* group(lv_obj_t* parent) {
   return g;
 }
 
+// WFH: a cyan reactor with a radar sweep on its outer ring; blips light up as the sweep passes.
 static void buildRadar(lv_obj_t* g) {
   arcRing(g, SCX - 75, SCY - 75, 150, 2, C_DIM, true);
-  arcRing(g, SCX - 50, SCY - 50, 100, 1, C_DIM, true);
-  arcRing(g, SCX - 25, SCY - 25, 50, 1, C_DIM, true);
-  rect(g, SCX - 75, SCY, 150, 1, C_DIM);
-  rect(g, SCX, SCY - 75, 1, 150, C_DIM);
+  lv_obj_t* sweep = arcRing(g, SCX - 75, SCY - 75, 150, 4, C_CYAN, false);
+  lv_arc_set_angles(sweep, 0, 40);
+  lv_obj_t* mid = arcRing(g, SCX - 58, SCY - 58, 116, 8, C_CYAN, false);
+  lv_arc_set_angles(mid, 0, 270);
+  lv_obj_t* in = arcRing(g, SCX - 40, SCY - 40, 80, 4, C_ICE, false);
+  lv_arc_set_angles(in, 0, 120);
+  dot(g, SCX, SCY, 15, C_CYAN);
   for (int i = 0; i < BLIPS; i++) {
-    rdBlip[i] = dot(g, SCX + blipR[i] * cosf(blipAng[i]), SCY + blipR[i] * sinf(blipAng[i]), 4, C_LIME);
+    float a = blipDeg[i] * PI / 180;
+    rdBlip[i] = dot(g, SCX + 66 * cosf(a), SCY + 66 * sinf(a), 4, C_LIME);
     lv_obj_set_style_opa(rdBlip[i], LV_OPA_TRANSP, 0);
   }
-  for (int i = BEAM_TRAIL - 1; i >= 0; i--) {
-    rdBeamPts[i][0] = P(SCX, SCY);
-    rdBeamPts[i][1] = P(SCX + 75, SCY);
-    rdBeam[i] = liveLine(g, rdBeamPts[i], 2, C_CYAN, 2);
-    lv_obj_set_style_line_opa(rdBeam[i], 255 - i * 255 / BEAM_TRAIL, 0);
-  }
-  dot(g, SCX, SCY, 6, C_CYAN);
+  spin(sweep, RD_SWEEP_MS, false);
+  spin(mid, 3000, false);
+  spin(in, 2000, true);
+  rdSweepStart = millis();
   for (int i = 0; i < 5; i++) rdBar[i] = rect(g, 196 + i * 12, 200 - (8 + i * 7), 8, 8 + i * 7, C_DIM);
   rdUplink = hudText(g, F_HUD, C_LIME, "UPLINK ACTIVE");
   lv_obj_set_pos(rdUplink, 262, 186);
@@ -1249,30 +1249,22 @@ static void buildShutdown(lv_obj_t* g) {
   lv_obj_set_style_bg_opa(lfScan, LV_OPA_40, 0);
 }
 
-// Point at perimeter position u (0..6, one unit per edge) of a hexagon of radius r around the emblem.
-static lv_point_precise_t hexAt(float r, float u) {
-  u = fmodf(u, 6);
-  int e = (int)u;
-  float f = u - e, a = e * PI / 3 - PI / 2, b = a + PI / 3;
-  return P(SCX + r * ((1 - f) * cosf(a) + f * cosf(b)), SCY + r * ((1 - f) * sinf(a) + f * sinf(b)));
-}
-
+// AWAY: a red reactor in lockdown: three shield segments turning together, an inner ring the
+// other way, a breathing "no entry" core and moving hazard tape.
 static void buildLockdown(lv_obj_t* g) {
-  for (int i = 0; i < 7; i++) {
-    awOuterPts[i] = hexAt(72, i);
-    awInnerPts[i] = hexAt(56, i + 0.5f);
+  arcRing(g, SCX - 75, SCY - 75, 150, 2, C_DIM, true);
+  for (int i = 0; i < 3; i++) {
+    lv_obj_t* seg = arcRing(g, SCX - 70, SCY - 70, 140, 7, C_RED, false);
+    lv_arc_set_angles(seg, i * 120, i * 120 + 75);
+    spin(seg, 4000, false);
   }
-  lv_obj_t* outer = liveLine(g, awOuterPts, 7, C_RED, 3);
-  lv_obj_set_style_line_opa(outer, LV_OPA_40, 0);
-  lv_obj_t* inner = liveLine(g, awInnerPts, 7, C_RED, 1);
-  lv_obj_set_style_line_opa(inner, LV_OPA_40, 0);
-  for (int i = 0; i < 2; i++) {
-    for (int j = 0; j < 3; j++) awRunPts[i][j] = hexAt(72, i * 3);
-    awRunner[i] = liveLine(g, awRunPts[i], 3, C_RED, 5);
-  }
+  lv_obj_t* in = arcRing(g, SCX - 48, SCY - 48, 96, 3, C_RED, false);
+  lv_arc_set_angles(in, 0, 200);
+  lv_obj_set_style_arc_opa(in, LV_OPA_60, LV_PART_INDICATOR);
+  spin(in, 2200, true);
   awCore = dot(g, SCX, SCY, 20, C_RED);
   rect(awCore, 11, 18, 18, 4, C_BG);  // "no entry" bar
-  // Hazard tape: slanted stripes in a clipped strip, slid left to right.
+  // Hazard tape: slanted stripes in a clipped strip, stepped along.
   lv_obj_t* strip = plain(g, 196, 250, 264, 16);
   awStripes = plain(strip, -20, 0, 304, 16);
   static lv_point_precise_t stripe[2] = {{0, 16}, {10, 0}};
@@ -1309,16 +1301,11 @@ static float wayProgress(time_t now) {
 }
 
 static void frameRadar(float t) {
-  float a = t * 2.2f;
-  for (int i = 0; i < BEAM_TRAIL; i++) {
-    float aa = a - i * 0.09f;
-    rdBeamPts[i][1] = P(SCX + 75 * cosf(aa), SCY + 75 * sinf(aa));
-    lv_line_set_points(rdBeam[i], rdBeamPts[i], 2);
-  }
+  // Leading edge of the sweep (arc 0..40 deg, rotated by spin()).
+  float lead = fmodf((millis() - rdSweepStart) * 360.0f / RD_SWEEP_MS + 40, 360);
   for (int i = 0; i < BLIPS; i++) {
-    float d = fmodf(fmodf(a - blipAng[i], 2 * PI) + 2 * PI, 2 * PI);
-    int o = d < 3 ? (int)(255 * (1 - d / 3)) : 0;
-    lv_obj_set_style_opa(rdBlip[i], o, 0);
+    float d = fmodf(lead - blipDeg[i] + 360, 360);  // degrees since the sweep passed
+    lv_obj_set_style_opa(rdBlip[i], d < 200 ? (lv_opa_t)(255 * (1 - d / 200)) : LV_OPA_TRANSP, 0);
   }
   int lit = ((int)(t * 4)) % 6;
   for (int i = 0; i < 5; i++) lv_obj_set_style_bg_color(rdBar[i], i < lit ? C_CYAN : C_DIM, 0);
@@ -1365,17 +1352,8 @@ static void frameShutdown(float t) {
 }
 
 static void frameLockdown(float t) {
-  // Each light covers 0.6 of an edge and bends around the corner it is crossing.
-  for (int i = 0; i < 2; i++) {
-    float u = fmodf(t * 4, 6) + i * 3, v = u + 0.6f;
-    float corner = floorf(v);
-    awRunPts[i][0] = hexAt(72, u);
-    awRunPts[i][1] = hexAt(72, corner > u ? corner : (u + v) / 2);
-    awRunPts[i][2] = hexAt(72, v);
-    lv_line_set_points(awRunner[i], awRunPts[i], 3);
-  }
   lv_obj_set_style_opa(awCore, 100 + (int)(155 * fabsf(sinf(t * 2.6f))), 0);
-  lv_obj_set_x(awStripes, -20 + (int)(t * 30) % 20);
+  lv_obj_set_x(awStripes, -20 + ((int)(t * 10) % 5) * 4);  // 4 px steps, 10 per second
   if (((int)(t * 1.5f)) % 2) lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
   else lv_obj_add_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
 }
