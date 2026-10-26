@@ -33,7 +33,7 @@
 #define STATUS_INPLACE_BLOCK 40000  // largest free block needed to check it with the dashboard on screen
 // LVGL's own memory region (lv_mem_pool.cpp). The full dashboard needs about 45 KB; anything beyond
 // the pool spills into the normal heap (logged as "overflow" in the heartbeat).
-#define LVGL_POOL_BYTES (48 * 1024)
+#define LVGL_POOL_BYTES (56 * 1024)
 // Daily restart for a clean heap (local hour; -1 turns it off).
 #define NIGHTLY_RESTART_HOUR 4
 
