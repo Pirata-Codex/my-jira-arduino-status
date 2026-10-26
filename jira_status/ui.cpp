@@ -1311,6 +1311,25 @@ static void buildLockdown(lv_obj_t* g) {
 
 // ----- per-frame animation -----
 
+// Change-only setters: an unchanged style or flag set from the 40 ms timer still makes LVGL
+// redraw the object, and on the status body that meant the whole screen 25 times a second.
+static void opaIf(lv_obj_t* o, lv_opa_t v) {
+  if (lv_obj_get_style_opa(o, LV_PART_MAIN) != v) lv_obj_set_style_opa(o, v, 0);
+}
+
+static void bgIf(lv_obj_t* o, lv_color_t c) {
+  if (!lv_color_eq(lv_obj_get_style_bg_color(o, LV_PART_MAIN), c)) lv_obj_set_style_bg_color(o, c, 0);
+}
+
+static void showIf(lv_obj_t* o, bool show) {
+  if (lv_obj_has_flag(o, LV_OBJ_FLAG_HIDDEN) != show) return;
+  if (show) lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN);
+  else lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+}
+
+static int navStep = -1;  // route point the ON THE WAY dot is at (redrawn only when it moves on)
+static bool navFlash = false;
+
 static float stPhase() { return (millis() - stShownAt) / 1000.0f; }
 
 // Title typed out letter by letter with a blinking cursor, then shown as is.
@@ -1334,22 +1353,27 @@ static float wayProgress(time_t now) {
 
 static void frameRadar(float t) {
   int lit = ((int)(t * 4)) % 6;
-  for (int i = 0; i < 5; i++) lv_obj_set_style_bg_color(rdBar[i], i < lit ? C_CYAN : C_DIM, 0);
-  if (((int)(t * 2)) % 2) lv_obj_remove_flag(rdUplink, LV_OBJ_FLAG_HIDDEN);
-  else lv_obj_add_flag(rdUplink, LV_OBJ_FLAG_HIDDEN);
+  for (int i = 0; i < 5; i++) bgIf(rdBar[i], i < lit ? C_CYAN : C_DIM);
+  showIf(rdUplink, ((int)(t * 2)) % 2);
 }
 
 static void frameNav(float t, time_t now) {
   float p = wayProgress(now);
   int k = min(ROUTE_N - 1, (int)(p * (ROUTE_N - 1)));
-  lv_line_set_points(nvDone, routePts, k + 1);
   int x = (int)routePts[k].x, y = (int)routePts[k].y;
-  placeDot(nvDot, x, y, 5);
-  placeDot(nvHalo, x, y, 9 + (int)(4 * fabsf(sinf(t * 4))));
-  lv_obj_set_width(nvBar, max(1, (int)(250 * p)));
+  if (k != navStep) {
+    navStep = k;
+    lv_line_set_points(nvDone, routePts, k + 1);
+    placeDot(nvDot, x, y, 5);
+    lv_obj_set_width(nvBar, max(1, (int)(250 * p)));
+  }
+  placeDot(nvHalo, x, y, 9 + (int)(4 * fabsf(sinf(t * 4))));  // small: fine every frame
   bool flash = p >= 0.99f && ((int)(t * 4)) % 2;
-  lv_obj_set_style_line_color(nvHqLine, flash ? C_LIME : C_CYAN, 0);
-  lv_obj_set_style_text_color(nvHqLbl, flash ? C_LIME : C_CYAN, 0);
+  if (flash != navFlash) {
+    navFlash = flash;
+    lv_obj_set_style_line_color(nvHqLine, flash ? C_LIME : C_CYAN, 0);
+    lv_obj_set_style_text_color(nvHqLbl, flash ? C_LIME : C_CYAN, 0);
+  }
 }
 
 static void frameShutdown(float t) {
@@ -1373,15 +1397,15 @@ static void frameShutdown(float t) {
     lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
   }
   typeTitle("LEFT THE OFFICE", t - 1.6f);
-  lv_obj_set_style_opa(lfCore, 64 + (int)(191 * fabsf(sinf(t * 1.4f))), 0);
+  opaIf(lfCore, 64 + (int)(191 * fabsf(sinf(t * 1.4f))));
   lv_obj_set_y(lfScan, 60 + (int)(t * 60) % 240);
 }
 
 static void frameLockdown(float t) {
-  lv_obj_set_style_opa(awCore, 110 + (int)(145 * fabsf(sinf(t * 1.8f))), 0);
-  lv_obj_set_x(awStripes, -20 + (int)(t * 24) % 20);
-  if (((int)(t * 1.5f)) % 2) lv_obj_remove_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
-  else lv_obj_add_flag(stExtra, LV_OBJ_FLAG_HIDDEN);
+  opaIf(awCore, 110 + (int)(145 * fabsf(sinf(t * 1.8f))));
+  int x = -20 + (int)(t * 24) % 20;
+  if (lv_obj_get_x(awStripes) != x) lv_obj_set_x(awStripes, x);
+  showIf(stExtra, ((int)(t * 1.5f)) % 2);
 }
 
 static void statusFrame(lv_timer_t*) {
@@ -1389,7 +1413,7 @@ static void statusFrame(lv_timer_t*) {
   float t = stPhase();
   time_t now = time(nullptr);
   // Boot flicker for the first third of a second.
-  lv_obj_set_style_opa(stBody, t < 0.35f && ((int)(t * 30)) % 2 ? LV_OPA_40 : LV_OPA_COVER, 0);
+  opaIf(stBody, t < 0.35f && ((int)(t * 30)) % 2 ? LV_OPA_40 : LV_OPA_COVER);
   static const char* titles[] = {"", "WORKING FROM HOME", "ON MY WAY", "", "NOT AVAILABLE"};
   switch (curStatus) {
     case ST_WFH: typeTitle(titles[ST_WFH], t); frameRadar(t); break;
@@ -1472,6 +1496,8 @@ static void renderStatusTime(time_t now) {
 static void renderStatus(time_t now) {
   stSubText = stTitleText = "";
   stShownAt = millis();
+  navStep = -1;
+  navFlash = false;
   if (curStatus == ST_NONE) { dropStatusScreen(); return; }
   if (!stScreen) buildStatus();
   useGroup(curStatus);
