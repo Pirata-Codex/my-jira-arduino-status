@@ -4,6 +4,9 @@
 // Stored in NVS on the board (never in the repo). Edited on the board's web page.
 struct Settings {
   String jiraUrl;     // e.g. https://jira.example.com
+  // Backup addresses (optional), e.g. a relay at home that reaches the company network over VPN.
+  // A fetch that fails on one address tries the other; the one that worked is tried first next time.
+  String jiraUrl2, kumaUrl2, icsUrl2;
   String jiraPat;     // Jira personal access token (Bearer). Use a read-only account if you can.
   String jql;         // your sprint cards
   String spField;     // story points custom field, e.g. customfield_10006 (empty = count cards)

@@ -156,19 +156,47 @@ static CardCat categorize(const String& statusName, const char* catKey, bool& bl
   return CAT_TODO;
 }
 
+// ---------- primary / backup addresses ----------
+// Jira, Kuma and the calendar each have a configured address and an optional backup. A fetch tries
+// the one that worked last time first and the other when it fails (not when it ran out of memory:
+// that would fail on either address).
+static String jiraBase, kumaBase;  // the address the current attempt uses (no trailing slash)
+static uint8_t jiraPick = 0, kumaPick = 0, icsPick = 0;  // 0 = configured address, 1 = backup
+
+template <typename T, typename Fn>
+static void withBackup(T& out, const String& primary, const String& backup, uint8_t& pick, const char* name,
+                       String& base, Fn attempt) {
+  String urls[2] = {trimSlash(primary), trimSlash(backup)};
+  int order[2] = {pick, 1 - pick};
+  for (int i = 0; i < 2; i++) {
+    int k = order[i];
+    if (urls[k].isEmpty()) continue;
+    base = urls[k];
+    attempt(out);
+    if (out.ok) {
+      if (pick != k) LOG("%s: using the %s address", name, k ? "backup" : "configured");
+      pick = k;
+      return;
+    }
+    if (mem_is_oom(out.err) || urls[1 - k].isEmpty() || i == 1) return;
+    LOG("%s: %s failed (%s), trying the %s address", name, k ? "backup" : "configured", out.err.c_str(),
+        k ? "configured" : "backup");
+  }
+}
+
 static int jiraCount(const String& jql, String& err) {
   if (jql.isEmpty()) return -1;
   JsonDocument filter;
   filter["total"] = true;
   JsonDocument doc;
-  String url = trimSlash(gCfg.jiraUrl) + "/rest/api/2/search?maxResults=0&fields=key&jql=" + urlEncode(jql);
+  String url = jiraBase + "/rest/api/2/search?maxResults=0&fields=key&jql=" + urlEncode(jql);
   if (!getJson(url, gCfg.jiraPat, doc, &filter, err)) return -1;
   return doc["total"] | -1;
 }
 
-static void fetchJira(SprintData& s) {
+static void fetchJiraAt(SprintData& s) {
   s = SprintData();
-  String base = trimSlash(gCfg.jiraUrl);
+  const String& base = jiraBase;
   JsonDocument filter;
   JsonObject f = filter["issues"][0].to<JsonObject>();
   f["key"] = true;
@@ -344,10 +372,10 @@ static bool readHeartbeats(Stream& in, Beat* beats, int& n, int maxN, JsonDocume
   return true;
 }
 
-static void fetchKuma(HealthData& h) {
+static void fetchKumaAt(HealthData& h) {
   h = HealthData();
-  if (gCfg.kumaUrl.isEmpty() || gCfg.kumaSlug.isEmpty()) { h.err = "not configured"; return; }
-  String base = trimSlash(gCfg.kumaUrl);
+  if (gCfg.kumaSlug.isEmpty()) { h.err = "not configured"; return; }
+  const String& base = kumaBase;
 
   // 1) Monitor ids and names from the status page (small); copied out so the JSON is freed at once.
   int ids[MAX_MONITORS];
@@ -767,31 +795,37 @@ static String lanIcsUrl() {
 
 // Tries the configured link up to 3 times (the public server fails intermittently). On the company
 // network (a 10.x address) the internal server is tried last; elsewhere it can't be reached.
+// Tries the configured link and the backup link (the one that worked last time first, twice each),
+// then the internal mail server on the company network.
 static void fetchCalendar(MeetingData& d) {
-  String link = gCfg.icsUrl;
-  link.trim();  // a stray space or newline from pasting ends up in the request path
-  String lan = WiFi.localIP()[0] == 10 ? lanIcsUrl() : String();
-  MeetingData first;
-  int tries = lan.length() ? 4 : 3;
-  for (int attempt = 1; attempt <= tries; attempt++) {
-    bool useLan = attempt == 4;
-    fetchCalendarUnlocked(d, useLan ? lan : link);
-    if (d.ok || !d.configured) {
-      if (d.ok) LOG("calendar: ok via %s", useLan ? "internal server" : "configured link");
-      return;
-    }
-    if (attempt == 1) first.err = d.err;
-    if (attempt < tries) {
-      LOG("calendar: %s, retry %d/%d", d.err.c_str(), attempt, tries - 1);
-      delay(1000 * attempt);
+  String links[3] = {gCfg.icsUrl, gCfg.icsUrl2, WiFi.localIP()[0] == 10 ? lanIcsUrl() : String()};
+  static const char* names[3] = {"configured link", "backup link", "internal server"};
+  for (String& l : links) l.trim();  // a stray space or newline from pasting ends up in the request path
+  int order[3] = {icsPick, 1 - icsPick, 2};
+  String firstErr;
+  for (int i = 0; i < 3; i++) {
+    int k = order[i];
+    if (links[k].isEmpty()) continue;
+    for (int attempt = 1; attempt <= 2; attempt++) {
+      fetchCalendarUnlocked(d, links[k]);
+      if (!d.configured) return;
+      if (d.ok) {
+        LOG("calendar: ok via %s", names[k]);
+        if (k < 2) icsPick = k;
+        return;
+      }
+      if (!firstErr.length()) firstErr = d.err;
+      if (mem_is_oom(d.err)) return;  // would fail on any link
+      LOG("calendar: %s failed (%s)%s", names[k], d.err.c_str(), attempt == 1 ? ", retrying" : "");
+      if (attempt == 1) delay(1000);
     }
   }
-  if (lan.length()) d.err = first.err + " (internal: " + d.err + ")";
+  if (d.err != firstErr) d.err = firstErr + " (last: " + d.err + ")";
 }
 
 static void fetchCalendarUnlocked(MeetingData& d, const String& url0) {
   d = MeetingData();
-  if (gCfg.icsUrl.isEmpty()) return;
+  if (gCfg.icsUrl.isEmpty() && gCfg.icsUrl2.isEmpty()) return;
   d.configured = true;
 
   time_t now = time(nullptr);
@@ -947,8 +981,9 @@ static bool timeValid() { return time(nullptr) > 1700000000; }
 
 static String jiraUserName;  // from /myself, once
 
-static void fetchStatus(StatusData& st) {
-  String base = trimSlash(gCfg.jiraUrl);
+static void fetchStatusAt(StatusData& st) {
+  st = StatusData();
+  const String& base = jiraBase;
   String err;
   if (!jiraUserName.length()) {
     JsonDocument doc, filter;
@@ -978,6 +1013,19 @@ static void fetchStatus(StatusData& st) {
   st.since = same ? prev.since : st.updated;
   model_unlock();
   LOG("status: %s%s%s", st.code.length() ? st.code.c_str() : "(none)", st.eta.length() ? " eta " : "", st.eta.c_str());
+}
+
+static void fetchJira(SprintData& s) {
+  withBackup(s, gCfg.jiraUrl, gCfg.jiraUrl2, jiraPick, "jira", jiraBase, fetchJiraAt);
+}
+
+static void fetchStatus(StatusData& st) {
+  withBackup(st, gCfg.jiraUrl, gCfg.jiraUrl2, jiraPick, "status", jiraBase, fetchStatusAt);
+}
+
+static void fetchKuma(HealthData& h) {
+  if (gCfg.kumaUrl.isEmpty() && gCfg.kumaUrl2.isEmpty()) { h = HealthData(); h.err = "not configured"; return; }
+  withBackup(h, gCfg.kumaUrl, gCfg.kumaUrl2, kumaPick, "kuma", kumaBase, fetchKumaAt);
 }
 
 // Fills a fresh copy and swaps it in; on failure keeps the last good data and only records the error.
@@ -1049,7 +1097,7 @@ void fetch_all(FetchProgress p, RefreshKind kind) {
       model_unlock();
     }
     // Calendar first, while the heap is least fragmented: the mail server's TLS handshake is the heaviest.
-    if (gCfg.icsUrl.isEmpty()) {
+    if (gCfg.icsUrl.isEmpty() && gCfg.icsUrl2.isEmpty()) {
       report(STEP_CALENDAR, STEP_SKIP, "no .ics URL");
     } else {
       report(STEP_CALENDAR, STEP_RUN);

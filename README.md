@@ -139,6 +139,7 @@ USB is needed **once**. After that, update over WiFi:
    - **Board ID** from the board URL (`rapidView=…`), for the sprint name and end date.
    - **Calendar .ics URL**: Outlook on the web → Settings → Calendar → Shared calendars → Publish a calendar → ICS link.
    - **Company WiFi** (optional): SSID, user and password for PEAP.
+   - **Backup URLs** (optional) for Jira, Kuma and the calendar: tried when the first address fails (for example a relay PC at home that reaches the company network over VPN). The address that worked is tried first next time.
 
 ## ◢ Web console
 

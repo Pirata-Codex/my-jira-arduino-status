@@ -18,6 +18,9 @@ void settings_load() {
   gCfg.kumaUrl = prefs.getString("kumaUrl", "https://kuma.orchidpharmed.com");
   gCfg.kumaSlug = prefs.getString("kumaSlug", "crm");
   gCfg.icsUrl = prefs.getString("icsUrl", "");
+  gCfg.jiraUrl2 = prefs.getString("jiraUrl2", "");
+  gCfg.kumaUrl2 = prefs.getString("kumaUrl2", "");
+  gCfg.icsUrl2 = prefs.getString("icsUrl2", "");
   // Default password = last 6 hex digits of the chip id; shown on the boot screen.
   char def[8];
   snprintf(def, sizeof(def), "%06llx", ESP.getEfuseMac() & 0xFFFFFF);
@@ -52,6 +55,9 @@ void settings_save() {
   prefs.putString("kumaUrl", gCfg.kumaUrl);
   prefs.putString("kumaSlug", gCfg.kumaSlug);
   prefs.putString("icsUrl", gCfg.icsUrl);
+  prefs.putString("jiraUrl2", gCfg.jiraUrl2);
+  prefs.putString("kumaUrl2", gCfg.kumaUrl2);
+  prefs.putString("icsUrl2", gCfg.icsUrl2);
   prefs.putString("webPass", gCfg.webPass);
   prefs.putUChar("bright", gCfg.brightness);
   prefs.putUShort("rotate", gCfg.rotateSec);

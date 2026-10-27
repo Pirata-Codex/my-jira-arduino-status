@@ -63,6 +63,7 @@ static void handleRoot() {
   if (meetErr.length()) h += "<p class=err>Calendar: " + esc(meetErr) + "</p>";
   h += F("<form method=post action=/save><h2>Jira</h2>");
   h += field("jiraUrl", "Jira URL", gCfg.jiraUrl, "e.g. https://jira.example.com");
+  h += field("jiraUrl2", "Jira URL (backup)", gCfg.jiraUrl2, "Optional. Tried when the first one fails, e.g. a relay at home: http://192.168.137.1:8080");
   // The token is never sent back to the browser; leave empty to keep the stored one.
   h += field("jiraPat", "Personal access token", "", gCfg.jiraPat.length() ? "A token is stored. Leave empty to keep it." : "Jira profile → Personal Access Tokens", "password");
   h += field("jql", "My sprint cards (JQL)", gCfg.jql);
@@ -75,9 +76,11 @@ static void handleRoot() {
   h += field("k2Jql", "KPI 2 JQL", gCfg.kpi2Jql);
   h += F("<h2>Health (Uptime Kuma)</h2>");
   h += field("kumaUrl", "Kuma URL", gCfg.kumaUrl);
+  h += field("kumaUrl2", "Kuma URL (backup)", gCfg.kumaUrl2, "Optional, e.g. http://192.168.137.1:8081");
   h += field("kumaSlug", "Status page slug", gCfg.kumaSlug);
   h += F("<h2>Meetings</h2>");
   h += field("icsUrl", "Calendar .ics URL", gCfg.icsUrl, "Outlook: Settings → Calendar → Shared calendars → Publish → ICS link");
+  h += field("icsUrl2", "Calendar .ics URL (backup)", gCfg.icsUrl2, "Optional: the same link through another host, e.g. http://192.168.137.1:8082/owa/calendar/...");
   h += F("<h2>Company WiFi (PEAP)</h2><p><small>Tried first on every boot; the normal WiFi is the fallback. "
          "Saving restarts the board.</small></p>");
   h += field("entSsid", "Network name (SSID)", gCfg.entSsid, "Empty = don't use company WiFi");
@@ -119,6 +122,9 @@ static void handleSave() {
   gCfg.kumaSlug = arg("kumaSlug");
   gCfg.icsUrl = arg("icsUrl");
   gCfg.icsUrl.trim();
+  gCfg.jiraUrl2 = arg("jiraUrl2");
+  gCfg.kumaUrl2 = arg("kumaUrl2");
+  gCfg.icsUrl2 = arg("icsUrl2");
   gCfg.brightness = constrain(arg("bright").toInt(), 10, 255);
   gCfg.rotateSec = constrain(arg("rotate").toInt(), 4, 120);
   gCfg.refreshMin = constrain(arg("refresh").toInt(), 2, 240);
