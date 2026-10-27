@@ -24,6 +24,7 @@ struct Settings {
   uint8_t cardPageSec;  // cards slide: seconds per page
   bool hideDone;        // cards slide: leave out Done cards
   String ownerName;     // F.R.I.D.A.Y. greets you by this name
+  String rfidUids;      // your badge ids (hex, comma separated): tapping one sets IN / LEFT
   // Company WiFi, WPA2/WPA3-Enterprise with PEAP. Tried before the normal (WiFiManager) WiFi.
   String entSsid, entIdentity, entUser, entPass;
   String entCa;        // optional CA certificate (PEM) to verify the RADIUS server

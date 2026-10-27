@@ -981,21 +981,66 @@ static bool timeValid() { return time(nullptr) > 1700000000; }
 
 static String jiraUserName;  // from /myself, once
 
+static bool ensureUserName(const String& base, String& err) {
+  if (jiraUserName.length()) return true;
+  JsonDocument doc, filter;
+  filter["name"] = true;
+  if (!getJson(base + "/rest/api/2/myself", gCfg.jiraPat, doc, &filter, err)) { err = "myself: " + err; return false; }
+  jiraUserName = doc["name"] | "";
+  if (!jiraUserName.length()) { err = "no user name"; return false; }
+  return true;
+}
+
+static String statusUrl(const String& base) {
+  return base + "/rest/api/2/user/properties/" STATUS_PROPERTY "?username=" + urlEncode(jiraUserName);
+}
+
+// ----- writing it (badge taps) -----
+static String pendingStatus;  // waiting to be written to Jira ("" = nothing)
+
+struct WriteResult {
+  bool ok = false;
+  String err;
+};
+
+static void putStatusAt(WriteResult& r) {
+  r = WriteResult();
+  if (!ensureUserName(jiraBase, r.err)) return;
+  HTTPClient http;
+  WiFiClientSecure tls;
+  WiFiClient plain;
+  if (!begin(http, tls, plain, statusUrl(jiraBase))) { r.err = "bad url"; return; }
+  http.addHeader("Authorization", "Bearer " + gCfg.jiraPat);
+  http.addHeader("Content-Type", "application/json");
+  int code = http.PUT(String("{\"status\":\"") + pendingStatus + "\"}");
+  http.end();
+  LOG("  PUT status %s -> %d", pendingStatus.c_str(), code);
+  if (code == 200 || code == 201 || code == 204) r.ok = true;
+  else r.err = code > 0 ? "HTTP " + String(code) : HTTPClient::errorToString(code);
+}
+
+void fetch_set_status(const String& code) {
+  pendingStatus = code;
+  model_lock();
+  StatusData& s = gData.status;
+  s.ok = true;
+  s.err = "";
+  s.code = code;
+  s.eta = s.note = "";
+  s.since = s.updated = time(nullptr);
+  gData.version++;
+  model_unlock();
+}
+
+// ----- reading it -----
 static void fetchStatusAt(StatusData& st) {
   st = StatusData();
   const String& base = jiraBase;
   String err;
-  if (!jiraUserName.length()) {
-    JsonDocument doc, filter;
-    filter["name"] = true;
-    if (!getJson(base + "/rest/api/2/myself", gCfg.jiraPat, doc, &filter, err)) { st.err = "myself: " + err; return; }
-    jiraUserName = doc["name"] | "";
-    if (!jiraUserName.length()) { st.err = "no user name"; return; }
-  }
+  if (!ensureUserName(base, st.err)) return;
   JsonDocument doc, filter;
   filter["value"] = true;
-  String url = base + "/rest/api/2/user/properties/" STATUS_PROPERTY "?username=" + urlEncode(jiraUserName);
-  if (!getJson(url, gCfg.jiraPat, doc, &filter, err)) {
+  if (!getJson(statusUrl(base), gCfg.jiraPat, doc, &filter, err)) {
     if (err != "HTTP 404") { st.err = err; return; }  // 404: never set, so at the office
   } else {
     JsonVariant v = doc["value"];
@@ -1055,7 +1100,8 @@ RefreshKind fetch_due() {
   if (refreshNow || millis() - lastFetch >= gCfg.refreshMin * 60000UL) return REFRESH_FULL;
   if (lastFetchYday >= 0 && localYday() != lastFetchYday) return REFRESH_FULL;  // just past midnight
   if (millis() - lastKuma >= gCfg.kumaMin * 60000UL) return REFRESH_KUMA;
-  if (!settings_mock() && millis() - lastStatus >= STATUS_POLL_MS) return REFRESH_STATUS;
+  // A badge tap waits at most a few seconds (retries 5 s apart while there's no room or no Jira).
+  if (!settings_mock() && millis() - lastStatus >= (pendingStatus.length() ? 5000UL : STATUS_POLL_MS)) return REFRESH_STATUS;
   return REFRESH_NONE;
 }
 
@@ -1066,7 +1112,14 @@ void fetch_all(FetchProgress p, RefreshKind kind) {
   if (full) refreshNow = false;
   if (!settings_mock()) {
     // Status first: it is tiny, and with every refresh kind the board reflects it within a minute.
-    publish("status", MF_FETCH_STATUS, &Snapshot::status, fetchStatus, err);
+    if (pendingStatus.length()) {
+      WriteResult w;
+      withBackup(w, gCfg.jiraUrl, gCfg.jiraUrl2, jiraPick, "status write", jiraBase, putStatusAt);
+      if (w.ok) pendingStatus = "";
+      else LOG("status: write failed (%s), will retry", w.err.c_str());
+    }
+    // A write that hasn't gone through yet would be undone by reading the old value back.
+    if (!pendingStatus.length()) publish("status", MF_FETCH_STATUS, &Snapshot::status, fetchStatus, err);
     lastStatus = millis();
   }
   if (kind == REFRESH_STATUS) {

@@ -1677,7 +1677,17 @@ static void updateBanner(time_t now) {
 
 // ---------- header: F.R.I.D.A.Y. status line, health, WiFi, clock ----------
 
+static String toastText;
+static uint32_t toastUntil = 0;
+
+void ui_toast(const String& text, uint32_t ms) {
+  toastText = text;
+  toastUntil = millis() + ms;
+  hdPhraseText = "";  // redraw the header line now
+}
+
 static String fridayPhrase(const struct tm& lt) {
+  if (toastUntil && millis() < toastUntil) return toastText;
   if (alertCount) {
     const Alert& a = alerts[0];
     if (a.mode == BN_DOWN) return a.right.substring(0, a.right.indexOf('/')) + " SERVICE(S) DOWN, " + gCfg.ownerName;

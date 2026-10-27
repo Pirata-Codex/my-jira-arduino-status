@@ -16,3 +16,6 @@ void fetch_all(FetchProgress progress, RefreshKind kind);
 void fetch_request_refresh();
 // Skip this minute's status check (too little memory); it runs again with the next refresh.
 void fetch_status_postpone();
+// Sets your presence status (badge tap): shown at once, written to Jira with the next status check
+// (right away when there is room, else with the next refresh); a failed write is retried.
+void fetch_set_status(const String& code);

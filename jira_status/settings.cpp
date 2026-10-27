@@ -33,6 +33,7 @@ void settings_load() {
   gCfg.cardPageSec = prefs.getUChar("cardSec", 5);
   gCfg.hideDone = prefs.getBool("hideDone", false);
   gCfg.ownerName = prefs.getString("owner", "Boss");
+  gCfg.rfidUids = prefs.getString("rfidUids", "");
   gCfg.entSsid = prefs.getString("entSsid", "");
   gCfg.entIdentity = prefs.getString("entId", "");
   gCfg.entUser = prefs.getString("entUser", "");
@@ -67,6 +68,7 @@ void settings_save() {
   prefs.putUChar("cardSec", gCfg.cardPageSec);
   prefs.putBool("hideDone", gCfg.hideDone);
   prefs.putString("owner", gCfg.ownerName);
+  prefs.putString("rfidUids", gCfg.rfidUids);
   prefs.putString("entSsid", gCfg.entSsid);
   prefs.putString("entId", gCfg.entIdentity);
   prefs.putString("entUser", gCfg.entUser);

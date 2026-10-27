@@ -86,6 +86,21 @@ curl -X DELETE -H "Authorization: Bearer $PAT" "$JIRA/rest/api/2/user/properties
 
 Suggested bot commands: `/wfh [note]`, `/otw 09:40 [note]`, `/left [09:00]`, `/away [14:00] [note]`, `/in`, `/status`.
 
+### ◢ Badge reader (RC522)
+
+Tap your badge on the reader next to the board when you arrive and when you leave: it flips your status between `IN` (normal dashboard) and `LEFT` (with its usual 06:00 expiry), through the same Jira property. The header confirms with `WELCOME BACK` / `SEE YOU`; the screen changes at once and the write to Jira follows within seconds (retried until it goes through).
+
+| RC522 | ESP32-S3 |
+|---|---|
+| SDA (SS) | GPIO 15 |
+| SCK | GPIO 5 |
+| MOSI | GPIO 6 |
+| MISO | GPIO 7 |
+| RST | GPIO 16 |
+| 3.3V / GND | 3V3 / GND |
+
+Install the library **MFRC522** (by GithubCommunity). Tap an unknown badge once: the header shows `UNKNOWN BADGE 04A1B2C3`; put that id in **Badge ids** on the settings page (several ids: comma separated). Pins are in `config.h`; `RFID_ENABLED 0` turns it off.
+
 ## ◢ Systems
 
 ```

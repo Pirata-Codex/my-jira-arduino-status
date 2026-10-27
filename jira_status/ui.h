@@ -10,3 +10,5 @@ void ui_refresh(RefreshKind kind = REFRESH_FULL);
 // Call from loop(): clock, page rotation, banners, redraw on new data.
 void ui_tick();
 void ui_apply_settings();
+// A short message in the header status line (badge taps), for `ms` milliseconds.
+void ui_toast(const String& text, uint32_t ms);

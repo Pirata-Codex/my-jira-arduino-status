@@ -96,6 +96,7 @@ static void handleRoot() {
   h += field("refresh", "Refresh Jira + calendar every (minutes)", String(gCfg.refreshMin), "The dashboard pauses for a few seconds while it refreshes", "number");
   h += field("kumaMin", "Refresh Kuma health every (minutes)", String(gCfg.kumaMin), "", "number");
   h += field("owner", "Your name", gCfg.ownerName, "F.R.I.D.A.Y. greets you with it");
+  h += field("rfidUids", "Badge ids", gCfg.rfidUids, "Your RFID badges (hex, comma separated). Tap an unknown badge: the board shows its id");
   h += F("<h2>Cards slide</h2>");
   h += field("cardsPP", "Cards per page (1-5)", String(gCfg.cardsPerPage), "", "number");
   h += field("cardSec", "Seconds per page", String(gCfg.cardPageSec), "", "number");
@@ -125,6 +126,7 @@ static void handleSave() {
   gCfg.jiraUrl2 = arg("jiraUrl2");
   gCfg.kumaUrl2 = arg("kumaUrl2");
   gCfg.icsUrl2 = arg("icsUrl2");
+  gCfg.rfidUids = arg("rfidUids");
   gCfg.brightness = constrain(arg("bright").toInt(), 10, 255);
   gCfg.rotateSec = constrain(arg("rotate").toInt(), 4, 120);
   gCfg.refreshMin = constrain(arg("refresh").toInt(), 2, 240);

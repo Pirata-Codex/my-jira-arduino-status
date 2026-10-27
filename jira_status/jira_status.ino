@@ -12,6 +12,7 @@
 #include "web.h"
 #include "ui.h"
 #include "memory.h"
+#include "rfid.h"
 
 #if !LV_USE_TFT_ESPI || !LV_USE_CHART || !LV_FONT_MONTSERRAT_48
 #error "LVGL is using another lv_conf.h. Copy extras/lv_conf.h over Documents/Arduino/libraries/lv_conf.h"
@@ -209,6 +210,7 @@ void setup() {
   mem_init();
   configTzTime(TZ_INFO, NTP_1, NTP_2, NTP_3);
   web_begin();
+  rfid_begin();
 
   String ip = WiFi.localIP().toString();
   ui_boot("Connected", "Settings: http://" + ip + "  (or http://" HOSTNAME ".local)\nUser admin, password " + gCfg.webPass);
@@ -258,6 +260,7 @@ void loop() {
   RefreshKind due = fetch_due();
   if (due != REFRESH_NONE) ui_refresh(due);
   watchWifi();
+  rfid_loop();
   // Daily restart for a clean heap (skipped in the first hour after boot, so it runs once).
   if (NIGHTLY_RESTART_HOUR >= 0 && millis() > 3600000UL) {
     time_t now = time(nullptr);

@@ -31,6 +31,16 @@
 // The memory arena (lv_mem_pool.cpp): reserved before WiFi, shared by the screen and the HTTPS
 // buffers, checked against the memory plan in memory.h.
 #define LVGL_POOL_BYTES (72 * 1024)
+// Badge reader (RC522, SPI) for arriving / leaving (rfid.cpp). Set RFID_ENABLED 0 without a reader.
+// Pins for the ESP32-S3 board (the display uses 9-14 on its own SPI bus).
+#define RFID_ENABLED 1
+#define RFID_SCK 5
+#define RFID_MOSI 6
+#define RFID_MISO 7
+#define RFID_SS 15
+#define RFID_RST 16
+#define RFID_POLL_MS 200     // how often the reader is asked for a card
+#define RFID_REPEAT_MS 5000  // the same badge counts once per this many ms
 // Daily restart for a clean heap (local hour; -1 turns it off).
 #define NIGHTLY_RESTART_HOUR 4
 
