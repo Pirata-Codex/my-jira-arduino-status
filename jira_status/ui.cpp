@@ -6,6 +6,7 @@
 #include <WiFi.h>
 #include "fetch.h"
 #include "memory.h"
+#include "sound.h"
 
 static void freePageNow(int p);  // frees a dashboard page at once (defined with the page lifecycle)
 
@@ -28,7 +29,8 @@ static uint32_t lastSwitch = 0, lastClock = 0;
 static bool started = false;
 
 // header + tab bar (lv_layer_top, survive refreshes)
-static lv_obj_t *header, *hdPhrase, *hdHealth, *hdClock, *hdWifi[4], *hdDot;
+static lv_obj_t *header, *hdPhrase, *hdHealth, *hdClock, *hdWifi[4], *hdDot, *hdSound;
+static int hdSoundStage = -2;  // stage the speaker icon shows (redrawn only when it changes)
 static lv_obj_t *tabBar, *tabLbl[PG_COUNT], *tabLine;
 static String hdPhraseText;
 // banner (meeting / outage)
@@ -391,11 +393,15 @@ static void buildHeader() {
   lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
   lv_anim_start(&a);
   hdPhrase = text(header, F_HUD, C_ICE, "");
-  lv_obj_set_size(hdPhrase, 150, 16);  // one line: long phrases end in "..." instead of wrapping
+  lv_obj_set_size(hdPhrase, 128, 16);  // one line: long phrases end in "..." instead of wrapping
   lv_label_set_long_mode(hdPhrase, LV_LABEL_LONG_DOT);
   lv_obj_set_pos(hdPhrase, 178, 9);
   hdHealth = hudText(header, F_HUD, C_LIME, "");
-  lv_obj_align(hdHealth, LV_ALIGN_RIGHT_MID, -88, 0);  // right edge at x 384, before the WiFi bars
+  lv_obj_align(hdHealth, LV_ALIGN_RIGHT_MID, -110, 0);  // right edge at x 362
+  // Room sound: a speaker in the stage's color, between the Kuma count and the WiFi bars.
+  hdSound = text(header, F_HUD, C_DIM, LV_SYMBOL_AUDIO);
+  lv_obj_align(hdSound, LV_ALIGN_RIGHT_MID, -88, 0);  // right edge at x 384
+  lv_obj_add_flag(hdSound, LV_OBJ_FLAG_HIDDEN);
   // WiFi bars sit in their own gap between the health count and the clock (clock starts ~x 414).
   for (int i = 0; i < 4; i++) hdWifi[i] = rect(header, 390 + i * 5, 24 - (4 + i * 3), 3, 4 + i * 3, C_DIM);
   hdClock = hudText(header, F_HUD_M, C_TEXT, "--:--");
@@ -1699,7 +1705,7 @@ static String fridayPhrase(const struct tm& lt) {
     return String(p[curStatus]) + ", " + gCfg.ownerName;
   }
   const SprintData& s = snap.sprint;
-  switch ((millis() / 8000) % 4) {
+  switch ((millis() / 8000) % 5) {
     case 0: {
       int h = lt.tm_hour;
       const char* g = h < 5 ? "LATE SHIFT, " : h < 12 ? "GOOD MORNING, " : h < 17 ? "GOOD AFTERNOON, " : h < 22 ? "GOOD EVENING, " : "LATE SHIFT, ";
@@ -1714,6 +1720,10 @@ static String fridayPhrase(const struct tm& lt) {
       for (int i = 0; i < s.count; i++) if (s.cards[i].cat != CAT_DONE) open++;
       return String(open) + " CARDS IN FLIGHT";
     }
+    case 4:
+      if (sound_stage() != SND_NONE)
+        return String("ROOM: ") + sound_name(sound_stage()) + " · " + String((int)(sound_db() + 0.5f)) + " DB";
+      // fall through: no microphone
     default:
       if (snap.mock) return "DEMO DATA";
       return s.updated ? "SYNCED " + hhmm(s.updated) : "AWAITING SYNC";
@@ -1736,6 +1746,17 @@ static void updateHeader(time_t now, const struct tm& lt) {
   int bars = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : rssi > -85 ? 1 : 0;
   for (int i = 0; i < 4; i++) lv_obj_set_style_bg_color(hdWifi[i], !wifi ? C_RED : i < bars ? C_CYAN : C_DIM, 0);
   lv_obj_set_style_bg_color(hdDot, wifi ? C_LIME : C_RED, 0);
+  SoundStage snd = sound_stage();
+  if (snd != hdSoundStage) {
+    hdSoundStage = snd;
+    static const lv_color_t cols[] = {C_LIME, C_CYAN, C_AMBER, C_RED};
+    if (snd == SND_NONE) {
+      lv_obj_add_flag(hdSound, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_set_style_text_color(hdSound, cols[snd], 0);
+      lv_obj_remove_flag(hdSound, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
 }
 
 // ---------- loop ----------

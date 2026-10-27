@@ -70,8 +70,8 @@ constexpr MemBudget MEM_BUDGET[MF_COUNT] = {
 // Free heap once WiFi runs (byte-addressable RAM, arena and draw buffer already reserved):
 // measured 71 KB with a 56 KB pool, so ~55 KB with the 72 KB arena. mem_init() logs the real value.
 constexpr uint32_t HEAP_BASE_EST = 55 * 1024;
-// Fixed heap users besides the fetches: web server, OTA, mDNS, sockets.
-constexpr uint32_t HEAP_SERVICES_EST = 8 * 1024;
+// Fixed heap users besides the fetches: web server, OTA, mDNS, sockets, the microphone task (3 KB stack).
+constexpr uint32_t HEAP_SERVICES_EST = 11 * 1024;
 // Text of one data snapshot (card titles, meeting names, monitor names) lives on the heap; the
 // structs themselves are globals. Two copies (gData and the UI's): a fetch moves its result in.
 constexpr uint32_t SNAPSHOT_TEXT_EST = MAX_CARDS * 110 + MAX_MONITORS * 40 + (MAX_MEETINGS + MAX_FUTURE) * 110 + 600;

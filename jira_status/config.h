@@ -41,6 +41,13 @@
 #define RFID_RST 16
 #define RFID_POLL_MS 200     // how often the reader is asked for a card
 #define RFID_REPEAT_MS 5000  // the same badge counts once per this many ms
+// Room sound level (sound.cpp): MAX4466 microphone, OUT on an ADC1 pin (ADC2 doesn't work with WiFi).
+#define MIC_ENABLED 1
+#define MIC_PIN 1
+// Stage limits in dB (approximate dB(A) after calibration): quiet office < 45, conversation ~55-60.
+#define SOUND_FOCUS_MAX 45        // below: FOCUS (quiet enough for deep work)
+#define SOUND_NORMAL_MAX 58       // below: NORMAL (usual office noise)
+#define SOUND_DISTRACTING_MAX 70  // below: DISTRACTING; above: TOO LOUD
 // Daily restart for a clean heap (local hour; -1 turns it off).
 #define NIGHTLY_RESTART_HOUR 4
 

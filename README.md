@@ -86,6 +86,19 @@ curl -X DELETE -H "Authorization: Bearer $PAT" "$JIRA/rest/api/2/user/properties
 
 Suggested bot commands: `/wfh [note]`, `/otw 09:40 [note]`, `/left [09:00]`, `/away [14:00] [note]`, `/in`, `/status`.
 
+### ◢ Room sound level (MAX4466)
+
+A MAX4466 microphone measures the room all the time (on the second CPU core, so the screen never waits for it). The header shows a speaker icon in the stage's color, and the status line rotates in `ROOM: NORMAL · 52 DB`.
+
+| Stage | Level | Color |
+|---|---|---|
+| **FOCUS** | below 45 dB | lime |
+| **NORMAL** | 45-58 dB | cyan |
+| **DISTRACTING** | 58-70 dB | amber |
+| **TOO LOUD** | above 70 dB | red |
+
+The level is smoothed over about 5 seconds (a door slam doesn't count), and a stage only changes 2 dB past its limit. Wiring: **VCC → 3V3, GND → GND, OUT → GPIO 1** (an ADC1 pin; ADC2 pins don't work while WiFi is on). The numbers are approximate: set **Microphone calibration** on the settings page so that a quiet room reads about 35-40 dB, and turn the gain screw on the MAX4466 to the middle. Limits and the pin are in `config.h`; `MIC_ENABLED 0` turns it off.
+
 ### ◢ Badge reader (RC522)
 
 Tap your badge on the reader next to the board when you arrive and when you leave: it flips your status between `IN` (normal dashboard) and `LEFT` (with its usual 06:00 expiry), through the same Jira property. The header confirms with `WELCOME BACK` / `SEE YOU`; the screen changes at once and the write to Jira follows within seconds (retried until it goes through).
