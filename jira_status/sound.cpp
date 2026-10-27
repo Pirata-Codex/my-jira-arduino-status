@@ -65,7 +65,7 @@ static int8_t stageFor(float db, int8_t current) {
 static void micTask(void*) {
   static uint8_t raw[1024];
   static int16_t pcm[128];
-  int pcmN = 0, pairN = 0, pairSum = 0, blockN = 0, windows = 0;
+  int pcmN = 0, pairN = 0, pairSum = 0, grpMin = 0, grpMax = 0, blockN = 0, windows = 0;
   float dc = 2048, acc = 0, smooth = 0, lp = 0;
   // Diagnostics, logged every 30 s: samples per second, the raw average (the bias, ~1900-2300 when
   // wired), its spread (noise), the range, and results that weren't our channel (decoding check).
@@ -97,9 +97,13 @@ static void micTask(void*) {
       rawN++;
       rawSum += v;
       rawSq += (int64_t)v * v;
+      // Trimmed average: the highest and lowest of the 8 are dropped, so a single spike (WiFi
+      // bursts disturb the ADC) doesn't become a click.
+      if (pairN == 0 || v < grpMin) grpMin = v;
+      if (pairN == 0 || v > grpMax) grpMax = v;
       pairSum += v;
       if (++pairN < OVERSAMPLE) continue;
-      float x = (float)pairSum / OVERSAMPLE;
+      float x = (float)(pairSum - grpMin - grpMax) / (OVERSAMPLE - 2);
       pairN = pairSum = 0;
       statN++;
       // Voice band: the bias tracker removes everything below ~80 Hz (bias, hum, desk thumps), a

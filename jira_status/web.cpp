@@ -31,7 +31,7 @@ button{background:#0E2230;color:#22D3EE;border:1px solid #1C6A80;border-radius:6
 <div id=w><canvas id=s width=480 height=320></canvas>
 <div id=m>ROOM SOUND<div id=db>--</div><div id=st></div><canvas id=g width=220 height=80></canvas>
 <div style="color:#86AABA">last 2 minutes</div>
-<div id=ls><button id=lb>&#128266; Listen</button><input id=vol type=range min=0 max=8 step=0.1 value=2 title=Volume style="width:90px"></div>
+<div id=ls><button id=lb>&#128266; Listen</button><input id=vol type=range min=0 max=8 step=0.1 value=2 title=Volume style="width:90px"><label title="Turn the hiss down between sounds"><input id=gt type=checkbox checked> Gate</label></div>
 </div></div>
 <div id=i>connecting...</div><p><a href=/>Settings</a> · <a href=/screenshot>Screenshot</a></p>
 <script>
@@ -39,7 +39,7 @@ const cv=document.getElementById('s'),cx=cv.getContext('2d'),info=document.getEl
 const g=document.getElementById('g'),gx=g.getContext('2d'),dbE=document.getElementById('db'),stE=document.getElementById('st');
 const NAMES=['FOCUS','NORMAL','DISTRACTING','TOO LOUD'],COLS=['#A3E635','#22D3EE','#F5A623','#FF4D5E'];
 let hist=[],bytes=0,frames=0,ctl=null,listen=false,actx=null,gain=null,next=0;
-const lb=document.getElementById('lb'),vol=document.getElementById('vol');
+const lb=document.getElementById('lb'),vol=document.getElementById('vol'),gt=document.getElementById('gt');
 // Listen: reconnects with ?audio=1; the board shows that the microphone is live while you listen.
 lb.onclick=()=>{
   listen=!listen;
@@ -55,11 +55,17 @@ lb.onclick=()=>{
   if(ctl)ctl.abort();
 };
 vol.oninput=()=>{if(gain)gain.gain.value=+vol.value};
+// Noise gate: the hiss between words is turned down. floor follows the quietest chunks (and creeps
+// up slowly, so it adapts to the room); a chunk well above it opens the gate.
+let prev=0,floor=0,gate=1;
 function audio(b){
   if(!listen||!actx)return;
   const n=b.length/2,dv=new DataView(b.buffer),f=new Float32Array(n*3);
-  // 8 kHz to 24 kHz (linear), a rate every browser accepts for a buffer.
-  let prev=0;for(let i=0;i<n;i++){const s=dv.getInt16(i*2,true)/32768;for(let k=0;k<3;k++)f[i*3+k]=prev+(s-prev)*(k+1)/3;prev=s}
+  let sq=0;for(let i=0;i<n;i++){const s=dv.getInt16(i*2,true);sq+=s*s}
+  const rms=Math.sqrt(sq/n)||1;floor=!floor||rms<floor?rms:floor*1.003;
+  const want=!gt.checked||rms>floor*3?1:0.06,g0=gate;gate+=(want-gate)*(want>gate?0.6:0.08);
+  // 8 kHz to 24 kHz (linear), a rate every browser accepts for a buffer. prev carries over chunks.
+  for(let i=0;i<n;i++){const s=dv.getInt16(i*2,true)/32768*(g0+(gate-g0)*i/n);for(let k=0;k<3;k++)f[i*3+k]=prev+(s-prev)*(k+1)/3;prev=s}
   const ab=actx.createBuffer(1,f.length,24000);ab.copyToChannel(f,0);
   const src=actx.createBufferSource();src.buffer=ab;src.connect(gain);
   const now=actx.currentTime;if(next<now+0.05||next>now+1)next=now+0.3;
