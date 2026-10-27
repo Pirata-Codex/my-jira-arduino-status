@@ -4,8 +4,8 @@
 #include "liveview.h"
 
 // The MAX4466 gives the sound wave around half the supply voltage. The ADC samples it all the time
-// (continuous mode: DMA, no CPU per sample) at 16 kHz; pairs are averaged to 8 kHz. That stream
-// feeds two things:
+// (continuous mode: DMA, no CPU per sample) at 64 kHz; every 8 samples are averaged into one 8 kHz
+// sample, which cuts the ADC's own hiss to about a third. That stream feeds two things:
 //   - the level: every 50 ms the RMS amplitude around the DC level,
 //       level (dB) = 20 * log10(RMS in ADC steps) + calibration
 //     The calibration (settings page) shifts it so that a quiet room reads about 35-40 dB. It's an
@@ -40,7 +40,8 @@ float sound_db() { return levelDb; }
 #define MIC_VALUE(p) ((p)->type2.data)
 #endif
 
-static const int ADC_HZ = 16000;           // ADC rate; two samples make one audio sample
+static const int OVERSAMPLE = 8;           // ADC samples averaged into one audio sample
+static const int ADC_HZ = MIC_AUDIO_HZ * OVERSAMPLE;  // 64 kHz (the S3 goes up to 83 kHz)
 static const int BLOCK = MIC_AUDIO_HZ / 20;  // audio samples per level window (50 ms)
 
 static adc_continuous_handle_t adc;
@@ -57,10 +58,13 @@ static int8_t stageFor(float db, int8_t current) {
 }
 
 static void micTask(void*) {
-  static uint8_t raw[256];
+  static uint8_t raw[1024];
   static int16_t pcm[128];
   int pcmN = 0, pairN = 0, pairSum = 0, blockN = 0, windows = 0;
-  float dc = 2048, acc = 0, smooth = 0;
+  float dc = 2048, acc = 0, smooth = 0, lp = 0;
+  // Diagnostics, logged every 30 s: samples per second and the raw range (bias, clipping, wiring).
+  uint32_t statAt = millis(), statN = 0;
+  int rawMin = 4095, rawMax = 0;
   for (;;) {
     uint32_t got = 0;
     if (adc_continuous_read(adc, raw, sizeof(raw), &got, 1000) != ESP_OK) continue;  // blocks: lets others run
@@ -68,12 +72,20 @@ static void micTask(void*) {
     for (uint32_t i = 0; i + SOC_ADC_DIGI_RESULT_BYTES <= got; i += SOC_ADC_DIGI_RESULT_BYTES) {
       auto* p = (adc_digi_output_data_t*)&raw[i];
       if (MIC_CHANNEL(p) != channel) continue;
-      pairSum += MIC_VALUE(p);
-      if (++pairN < 2) continue;
-      float x = pairSum * 0.5f;
+      int v = MIC_VALUE(p);
+      if (v < rawMin) rawMin = v;
+      if (v > rawMax) rawMax = v;
+      pairSum += v;
+      if (++pairN < OVERSAMPLE) continue;
+      float x = (float)pairSum / OVERSAMPLE;
       pairN = pairSum = 0;
-      dc += (x - dc) * (1.0f / 512);  // follows the bias (~1.65 V), removes it from the wave
-      float d = x - dc;
+      statN++;
+      // Voice band: the bias tracker removes everything below ~80 Hz (bias, hum, desk thumps), a
+      // light low-pass softens the hiss above ~3 kHz.
+      dc += (x - dc) * 0.06f;
+      float hp = x - dc;
+      lp += (hp - lp) * 0.9f;
+      float d = lp;
       acc += d * d;
       if (++blockN == BLOCK) {
         float rms = sqrtf(acc / BLOCK);
@@ -95,6 +107,14 @@ static void micTask(void*) {
       }
     }
     if (!listening) pcmN = 0;
+    if (millis() - statAt >= 30000) {
+      LOG("sound: %u samples/s, raw %d..%d, level %.0f dB", (unsigned)(statN * 1000 / (millis() - statAt)), rawMin,
+          rawMax, (float)levelDb);
+      statAt = millis();
+      statN = 0;
+      rawMin = 4095;
+      rawMax = 0;
+    }
   }
 }
 
@@ -105,8 +125,8 @@ void sound_begin() {
     return;
   }
   adc_continuous_handle_cfg_t hc = {};
-  hc.max_store_buf_size = 2048;
-  hc.conv_frame_size = 256;
+  hc.max_store_buf_size = 4096;
+  hc.conv_frame_size = 1024;
   adc_digi_pattern_config_t pat = {};
   pat.atten = ADC_ATTEN_DB_12;
   pat.channel = channel;

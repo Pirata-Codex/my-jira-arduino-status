@@ -43,7 +43,13 @@ const lb=document.getElementById('lb'),vol=document.getElementById('vol');
 // Listen: reconnects with ?audio=1; the board shows that the microphone is live while you listen.
 lb.onclick=()=>{
   listen=!listen;
-  if(listen&&!actx){actx=new AudioContext();gain=actx.createGain();gain.gain.value=+vol.value;gain.connect(actx.destination)}
+  if(listen&&!actx){
+    actx=new AudioContext();gain=actx.createGain();gain.gain.value=+vol.value;
+    // Voice band (150 Hz - 3.4 kHz): what's outside is mostly hiss and hum.
+    const hp=actx.createBiquadFilter(),lp=actx.createBiquadFilter();
+    hp.type='highpass';hp.frequency.value=150;lp.type='lowpass';lp.frequency.value=3400;
+    gain.connect(hp);hp.connect(lp);lp.connect(actx.destination);
+  }
   if(actx)listen?actx.resume():actx.suspend();
   lb.innerHTML=listen?'&#9209; Stop':'&#128266; Listen';next=0;
   if(ctl)ctl.abort();
