@@ -6,6 +6,8 @@
 // Live view. Every strip LVGL sends to the display is also copied into a mirror of the screen in
 // PSRAM (a memcpy, the display never waits for the network). A task on core 0 sends the changed
 // rectangles to the browser, at most 10 times a second, plus the room sound level once a second.
+// Audio ("Listen"): the microphone task puts 8 kHz 16-bit samples into a 2 s ring in PSRAM, sent
+// with the next update (16 KB/s); only while someone listens, and the board says so in its header.
 // Internal RAM: the task stack (3 KB, created with the first viewer) and the socket's send buffer
 // while someone watches. Without PSRAM there's no mirror and /stream says so.
 //
@@ -13,11 +15,42 @@
 //   "FRDY" u16 width u16 height
 //   then packets: u8 1, u16 x y w h, w*h RGB565 pixels   (a changed rectangle)
 //                 u8 2, u16 dB*10, i8 stage               (room sound, stage -1 = no microphone)
+//                 u8 3, u16 n, n int16 samples            (audio, MIC_AUDIO_HZ, only when asked for)
 
 static uint16_t* mirror = nullptr;  // W x H RGB565
 static int W = 0, H = 0;
 static volatile bool live = false;
 static QueueHandle_t handoff = nullptr;  // WiFiClient* for the task
+
+static bool put(WiFiClient& c, const void* p, size_t n) { return c.write((const uint8_t*)p, n) == n; }
+
+static const uint32_t RING = MIC_AUDIO_HZ * 2;  // samples (2 s)
+static int16_t* ring = nullptr;
+static volatile uint32_t ringW = 0, ringR = 0;   // running counts: written / sent
+static volatile bool wantAudio = false;
+
+bool liveview_listening() { return live && wantAudio; }
+
+// Microphone task (one writer); the stream task reads. Both indexes only grow.
+void liveview_audio(const int16_t* s, int n) {
+  if (!ring) return;
+  uint32_t w = ringW;
+  for (int i = 0; i < n; i++) ring[(w + i) % RING] = s[i];
+  ringW = w + n;
+}
+
+static bool sendAudio(WiFiClient& c) {
+  uint32_t w = ringW, r = ringR;
+  if (w - r > RING) r = w - RING / 4;  // the viewer fell behind: skip ahead, keep ~0.5 s
+  while (r != w) {
+    uint32_t at = r % RING, n = min(w - r, min(RING - at, (uint32_t)2048));  // contiguous part
+    uint8_t hd[3] = {3, (uint8_t)n, (uint8_t)(n >> 8)};
+    if (!put(c, hd, sizeof(hd)) || !put(c, ring + at, n * 2)) return false;
+    r += n;
+  }
+  ringR = r;
+  return true;
+}
 
 struct Rect { int16_t x1, y1, x2, y2; };
 static const int MAX_RECTS = 8;
@@ -55,8 +88,6 @@ void stream_capture(const lv_area_t* a, const uint8_t* px) {
     memcpy(mirror + y * W + x1, px + ((y - a->y1) * aw + (x1 - a->x1)) * 2, w * 2);
   markDirty({(int16_t)x1, (int16_t)y1, (int16_t)x2, (int16_t)y2});
 }
-
-static bool put(WiFiClient& c, const void* p, size_t n) { return c.write((const uint8_t*)p, n) == n; }
 
 static bool sendRect(WiFiClient& c, const Rect& r) {
   int w = r.x2 - r.x1 + 1, h = r.y2 - r.y1 + 1;
@@ -99,6 +130,7 @@ static void streamTask(void*) {
     portEXIT_CRITICAL(&mux);
     bool ok = c->connected();
     for (int i = 0; ok && i < n; i++) ok = sendRect(*c, r[i]);
+    if (ok && wantAudio) ok = sendAudio(*c);
     if (ok && millis() - lastSound >= 1000) {
       lastSound = millis();
       ok = sendSound(*c);
@@ -113,7 +145,7 @@ static void streamTask(void*) {
   }
 }
 
-bool stream_start(WiFiClient& client) {
+bool stream_start(WiFiClient& client, bool audio) {
   lv_display_t* disp = lv_display_get_default();
   if (!mirror) {
     W = lv_display_get_horizontal_resolution(disp);
@@ -123,6 +155,7 @@ bool stream_start(WiFiClient& client) {
       LOG("stream: no PSRAM for the screen copy");
       return false;
     }
+    ring = (int16_t*)heap_caps_calloc(RING, 2, MALLOC_CAP_SPIRAM);
     handoff = xQueueCreate(1, sizeof(WiFiClient*));
     xTaskCreatePinnedToCore(streamTask, "stream", 3072, nullptr, 1, nullptr, 0);
   }
@@ -138,9 +171,11 @@ bool stream_start(WiFiClient& client) {
     delete mine;
     return true;  // headers are out; the browser retries
   }
+  ringR = ringW;  // audio starts now, not with what's left in the ring
+  wantAudio = audio && ring;
   live = true;
   // One full redraw fills the mirror (and goes out as the first frame).
   lv_obj_invalidate(lv_screen_active());
-  LOG("stream: viewer connected");
+  LOG("stream: viewer connected%s", wantAudio ? ", listening" : "");
   return true;
 }

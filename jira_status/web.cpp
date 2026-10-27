@@ -25,16 +25,40 @@ static const char STREAM_PAGE[] PROGMEM = R"HTML(<!doctype html><meta charset=ut
 canvas#s{width:100%;max-width:960px;image-rendering:pixelated;border:1px solid #1C6A80;border-radius:8px}
 #m{border:1px solid #1C6A80;border-radius:8px;padding:12px;min-width:220px}
 #db{font-size:44px}#st{font-size:16px;letter-spacing:2px}#g{width:220px;height:80px;display:block;margin-top:10px}
-#i{color:#86AABA;margin-top:10px}a{color:#22D3EE}</style>
+#i{color:#86AABA;margin-top:10px}a{color:#22D3EE}
+button{background:#0E2230;color:#22D3EE;border:1px solid #1C6A80;border-radius:6px;padding:6px 12px;font:inherit;cursor:pointer}
+#ls{margin-top:12px;display:flex;gap:8px;align-items:center}</style>
 <div id=w><canvas id=s width=480 height=320></canvas>
 <div id=m>ROOM SOUND<div id=db>--</div><div id=st></div><canvas id=g width=220 height=80></canvas>
-<div style="color:#86AABA">last 2 minutes</div></div></div>
+<div style="color:#86AABA">last 2 minutes</div>
+<div id=ls><button id=lb>&#128266; Listen</button><input id=vol type=range min=0 max=8 step=0.1 value=2 title=Volume style="width:90px"></div>
+</div></div>
 <div id=i>connecting...</div><p><a href=/>Settings</a> · <a href=/screenshot>Screenshot</a></p>
 <script>
 const cv=document.getElementById('s'),cx=cv.getContext('2d'),info=document.getElementById('i');
 const g=document.getElementById('g'),gx=g.getContext('2d'),dbE=document.getElementById('db'),stE=document.getElementById('st');
 const NAMES=['FOCUS','NORMAL','DISTRACTING','TOO LOUD'],COLS=['#A3E635','#22D3EE','#F5A623','#FF4D5E'];
-let hist=[],bytes=0,frames=0;
+let hist=[],bytes=0,frames=0,ctl=null,listen=false,actx=null,gain=null,next=0;
+const lb=document.getElementById('lb'),vol=document.getElementById('vol');
+// Listen: reconnects with ?audio=1; the board shows that the microphone is live while you listen.
+lb.onclick=()=>{
+  listen=!listen;
+  if(listen&&!actx){actx=new AudioContext();gain=actx.createGain();gain.gain.value=+vol.value;gain.connect(actx.destination)}
+  if(actx)listen?actx.resume():actx.suspend();
+  lb.innerHTML=listen?'&#9209; Stop':'&#128266; Listen';next=0;
+  if(ctl)ctl.abort();
+};
+vol.oninput=()=>{if(gain)gain.gain.value=+vol.value};
+function audio(b){
+  if(!listen||!actx)return;
+  const n=b.length/2,dv=new DataView(b.buffer),f=new Float32Array(n*3);
+  // 8 kHz to 24 kHz (linear), a rate every browser accepts for a buffer.
+  let prev=0;for(let i=0;i<n;i++){const s=dv.getInt16(i*2,true)/32768;for(let k=0;k<3;k++)f[i*3+k]=prev+(s-prev)*(k+1)/3;prev=s}
+  const ab=actx.createBuffer(1,f.length,24000);ab.copyToChannel(f,0);
+  const src=actx.createBufferSource();src.buffer=ab;src.connect(gain);
+  const now=actx.currentTime;if(next<now+0.05||next>now+1)next=now+0.3;
+  src.start(next);next+=ab.duration;
+}
 function sound(db,st){
   if(st<0){dbE.textContent='--';stE.textContent='NO MICROPHONE';return}
   dbE.textContent=db.toFixed(0)+' dB';dbE.style.color=stE.style.color=COLS[st];stE.textContent=NAMES[st];
@@ -43,7 +67,8 @@ function sound(db,st){
   hist.forEach((h,k)=>{const y=Math.max(2,Math.min(78,80-(h[0]-30)*80/50));gx.fillStyle=COLS[h[1]];gx.fillRect(k*220/120,y,2,80-y)});
 }
 async function run(){
-  const r=await fetch('/stream.raw',{cache:'no-store'});
+  ctl=new AbortController();
+  const r=await fetch(listen?'/stream.raw?audio=1':'/stream.raw',{cache:'no-store',signal:ctl.signal});
   if(!r.ok){info.textContent=await r.text();return false}
   const rd=r.body.getReader();let chunks=[],have=0;
   async function take(n){
@@ -54,7 +79,7 @@ async function run(){
     have-=n;return out}
   const hd=await take(8);const v=new DataView(hd.buffer);
   cv.width=v.getUint16(4,true);cv.height=v.getUint16(6,true);
-  info.textContent='live';
+  info.textContent=listen?'live, listening':'live';
   for(;;){
     const t=(await take(1))[0];
     if(t===1){
@@ -65,11 +90,13 @@ async function run(){
       cx.putImageData(img,x,y);frames++;
     }else if(t===2){
       const p=new DataView((await take(3)).buffer);sound(p.getUint16(0,true)/10,p.getInt8(2));
+    }else if(t===3){
+      const n=new DataView((await take(2)).buffer).getUint16(0,true);audio(await take(n*2));
     }else throw new Error('bad packet');
   }
 }
-setInterval(()=>{if(info.textContent.startsWith('live'))info.textContent='live · '+(bytes/1024).toFixed(0)+' KB/s · '+frames+' updates/s';bytes=frames=0},1000);
-(async()=>{for(;;){try{if(await run()===false)return}catch(e){info.textContent='reconnecting...'}await new Promise(r=>setTimeout(r,2000))}})();
+setInterval(()=>{if(info.textContent.startsWith('live'))info.textContent=(listen?'live, listening':'live')+' · '+(bytes/1024).toFixed(0)+' KB/s · '+frames+' updates/s';bytes=frames=0},1000);
+(async()=>{for(;;){try{if(await run()===false)return}catch(e){if(e.name==='AbortError')continue;info.textContent='reconnecting...'}await new Promise(r=>setTimeout(r,2000))}})();
 </script>)HTML";
 
 static String esc(const String& s) {
@@ -258,7 +285,7 @@ void web_begin() {
   server.on("/stream.raw", HTTP_GET, [] {
     if (!auth()) return;
     WiFiClient c = server.client();
-    if (!stream_start(c))
+    if (!stream_start(c, server.arg("audio") == "1"))
       server.send(503, "text/plain", "Live view needs PSRAM (ESP32-S3 with PSRAM enabled in Tools > PSRAM).");
   });
   updater.setup(&server, "/update", "admin", gCfg.webPass.c_str());

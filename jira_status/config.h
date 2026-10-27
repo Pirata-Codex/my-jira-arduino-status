@@ -44,6 +44,7 @@
 // Room sound level (sound.cpp): MAX4466 microphone, OUT on an ADC1 pin (ADC2 doesn't work with WiFi).
 #define MIC_ENABLED 1
 #define MIC_PIN 1
+#define MIC_AUDIO_HZ 8000  // live view audio ("Listen" on /stream): 8 kHz, 16-bit
 // Stage limits in dB (approximate dB(A) after calibration): quiet office < 45, conversation ~55-60.
 #define SOUND_FOCUS_MAX 45        // below: FOCUS (quiet enough for deep work)
 #define SOUND_NORMAL_MAX 58       // below: NORMAL (usual office noise)

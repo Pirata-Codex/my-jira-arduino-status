@@ -88,7 +88,7 @@ Suggested bot commands: `/wfh [note]`, `/otw 09:40 [note]`, `/left [09:00]`, `/a
 
 ### ◢ Room sound level (MAX4466)
 
-A MAX4466 microphone measures the room all the time (on the second CPU core, so the screen never waits for it). The level shows in the stage's color in three places: `52dB` in the header (every page), a filled `52 dB` pill right of the clock on PULSE, and a **ROOM SOUND** tile on the health page (after the monitors) with the stage name and a 30-80 dB bar. The live view (`/stream`) shows it too, with a 2-minute graph.
+A MAX4466 microphone measures the room all the time (on the second CPU core, so the screen never waits for it). The level shows in the stage's color in three places: `52dB` in the header (every page), a filled `52 dB` pill right of the clock on PULSE, and a **ROOM SOUND** tile on the health page (after the monitors) with the stage name and a 30-80 dB bar. The live view (`/stream`) shows it too, with a 2-minute graph, and its **Listen** button plays the room (8 kHz audio, with a volume slider). While someone listens, the board's header says **MIC IS LIVE** in red, so the people around it know.
 
 | Stage | Level | Color |
 |---|---|---|
@@ -97,7 +97,7 @@ A MAX4466 microphone measures the room all the time (on the second CPU core, so 
 | **DISTRACTING** | 58-70 dB | amber |
 | **TOO LOUD** | above 70 dB | red |
 
-The level is smoothed over about 5 seconds (a door slam doesn't count), and a stage only changes 2 dB past its limit. Wiring: **VCC → 3V3, GND → GND, OUT → GPIO 1** (an ADC1 pin; ADC2 pins don't work while WiFi is on). The numbers are approximate: set **Microphone calibration** on the settings page so that a quiet room reads about 35-40 dB, and turn the gain screw on the MAX4466 to the middle. Limits and the pin are in `config.h`; `MIC_ENABLED 0` turns it off.
+The ADC samples the microphone continuously (DMA, 16 kHz averaged to 8 kHz), which feeds both the level and the audio. The level is smoothed over about 5 seconds (a door slam doesn't count), and a stage only changes 2 dB past its limit. Wiring: **VCC → 3V3, GND → GND, OUT → GPIO 1** (an ADC1 pin; ADC2 pins don't work while WiFi is on). The numbers are approximate: set **Microphone calibration** on the settings page so that a quiet room reads about 35-40 dB, and turn the gain screw on the MAX4466 to the middle. Limits and the pin are in `config.h`; `MIC_ENABLED 0` turns it off.
 
 ### ◢ Badge reader (RC522)
 
@@ -177,8 +177,8 @@ USB is needed **once**. After that, update over WiFi:
 | `/refresh` | fetch everything now |
 | `/memory` | memory budget: estimate vs measured per feature, room right now |
 | `/screenshot` | the screen as a 480×320 BMP (redrawn once and streamed, no extra RAM) |
-| `/stream` | live view: the screen as it draws, plus the room sound level and a 2-minute graph (ESP32-S3 with PSRAM) |
-| `/stream.raw` | the data `/stream` draws: changed rectangles (RGB565) and the sound level once a second |
+| `/stream` | live view: the screen as it draws, the room sound level with a 2-minute graph, and **Listen** for the room audio (ESP32-S3 with PSRAM) |
+| `/stream.raw` | the data `/stream` draws: changed rectangles (RGB565), the sound level once a second, and with `?audio=1` the microphone (8 kHz, 16-bit) |
 | `/update` | firmware upload |
 
 All pages use the `admin` login.

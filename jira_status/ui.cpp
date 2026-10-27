@@ -7,6 +7,7 @@
 #include "fetch.h"
 #include "memory.h"
 #include "sound.h"
+#include "liveview.h"
 
 static void freePageNow(int p);  // frees a dashboard page at once (defined with the page lifecycle)
 
@@ -1775,6 +1776,7 @@ void ui_toast(const String& text, uint32_t ms) {
 
 static String fridayPhrase(const struct tm& lt) {
   if (toastUntil && millis() < toastUntil) return toastText;
+  if (liveview_listening()) return "MIC IS LIVE";  // someone listens on /stream: say so
   if (alertCount) {
     const Alert& a = alerts[0];
     if (a.mode == BN_DOWN) return a.right.substring(0, a.right.indexOf('/')) + " SERVICE(S) DOWN, " + gCfg.ownerName;
@@ -1816,7 +1818,8 @@ static void updateHeader(time_t now, const struct tm& lt) {
   if (p != hdPhraseText) {
     hdPhraseText = p;
     lv_label_set_text(hdPhrase, p.c_str());
-    lv_obj_set_style_text_color(hdPhrase, alertCount ? (alerts[0].mode == BN_SOON ? C_AMBER : C_RED) : C_ICE, 0);
+    lv_obj_set_style_text_color(hdPhrase, liveview_listening() || (alertCount && alerts[0].mode != BN_SOON) ? C_RED
+                                          : alertCount ? C_AMBER : C_ICE, 0);
   }
   bool wifi = WiFi.status() == WL_CONNECTED;
   int rssi = wifi ? WiFi.RSSI() : -100;

@@ -1,12 +1,16 @@
 #include "sound.h"
 #include "config.h"
 #include "settings.h"
+#include "liveview.h"
 
-// The MAX4466 gives the sound wave around half the supply voltage. Every ~50 ms the board takes
-// 200 samples (~4 kHz), removes the DC level and computes the RMS amplitude:
-//   level (dB) = 20 * log10(RMS in ADC steps) + calibration
-// The calibration (settings page) shifts it so that a quiet room reads about 35-40 dB. It's an
-// approximation of dB(A), good enough to tell a quiet office from a loud one.
+// The MAX4466 gives the sound wave around half the supply voltage. The ADC samples it all the time
+// (continuous mode: DMA, no CPU per sample) at 16 kHz; pairs are averaged to 8 kHz. That stream
+// feeds two things:
+//   - the level: every 50 ms the RMS amplitude around the DC level,
+//       level (dB) = 20 * log10(RMS in ADC steps) + calibration
+//     The calibration (settings page) shifts it so that a quiet room reads about 35-40 dB. It's an
+//     approximation of dB(A), good enough to tell a quiet office from a loud one.
+//   - the audio for the live view, only while someone listens (/stream, "Listen").
 // The level is smoothed over ~5 s for the stage, so a door slam doesn't change it, and the stage
 // only changes after moving 2 dB past a limit (no flicker at the border).
 
@@ -23,6 +27,25 @@ SoundStage sound_stage() { return (SoundStage)stage; }
 float sound_db() { return levelDb; }
 
 #if MIC_ENABLED
+#include <esp_adc/adc_continuous.h>
+
+// The classic ESP32 reports ADC results in the TYPE1 layout, the S3 in TYPE2.
+#if CONFIG_IDF_TARGET_ESP32
+#define MIC_FORMAT ADC_DIGI_OUTPUT_FORMAT_TYPE1
+#define MIC_CHANNEL(p) ((p)->type1.channel)
+#define MIC_VALUE(p) ((p)->type1.data)
+#else
+#define MIC_FORMAT ADC_DIGI_OUTPUT_FORMAT_TYPE2
+#define MIC_CHANNEL(p) ((p)->type2.channel)
+#define MIC_VALUE(p) ((p)->type2.data)
+#endif
+
+static const int ADC_HZ = 16000;           // ADC rate; two samples make one audio sample
+static const int BLOCK = MIC_AUDIO_HZ / 20;  // audio samples per level window (50 ms)
+
+static adc_continuous_handle_t adc;
+static adc_channel_t channel;
+
 static int8_t stageFor(float db, int8_t current) {
   int8_t s = 0;
   while (s < 3 && db >= LIMITS[s]) s++;
@@ -34,35 +57,72 @@ static int8_t stageFor(float db, int8_t current) {
 }
 
 static void micTask(void*) {
-  static const int N = 200;
-  static uint16_t buf[N];
-  float smooth = 0;
-  int windows = 0;
+  static uint8_t raw[256];
+  static int16_t pcm[128];
+  int pcmN = 0, pairN = 0, pairSum = 0, blockN = 0, windows = 0;
+  float dc = 2048, acc = 0, smooth = 0;
   for (;;) {
-    uint32_t sum = 0;
-    for (int i = 0; i < N; i++) {
-      buf[i] = analogRead(MIC_PIN);
-      sum += buf[i];
-      delayMicroseconds(200);
-    }
-    float mean = (float)sum / N, acc = 0;
-    for (int i = 0; i < N; i++) {
-      float d = buf[i] - mean;
+    uint32_t got = 0;
+    if (adc_continuous_read(adc, raw, sizeof(raw), &got, 1000) != ESP_OK) continue;  // blocks: lets others run
+    bool listening = liveview_listening();
+    for (uint32_t i = 0; i + SOC_ADC_DIGI_RESULT_BYTES <= got; i += SOC_ADC_DIGI_RESULT_BYTES) {
+      auto* p = (adc_digi_output_data_t*)&raw[i];
+      if (MIC_CHANNEL(p) != channel) continue;
+      pairSum += MIC_VALUE(p);
+      if (++pairN < 2) continue;
+      float x = pairSum * 0.5f;
+      pairN = pairSum = 0;
+      dc += (x - dc) * (1.0f / 512);  // follows the bias (~1.65 V), removes it from the wave
+      float d = x - dc;
       acc += d * d;
+      if (++blockN == BLOCK) {
+        float rms = sqrtf(acc / BLOCK);
+        float db = 20 * log10f(rms < 1 ? 1 : rms) + gCfg.micCal;
+        smooth = windows ? smooth + (db - smooth) * 0.012f : db;  // ~5 s
+        if (windows < 1000) windows++;
+        levelDb = smooth;
+        if (windows >= 40) stage = stageFor(smooth, stage);  // ~2 s to settle after boot
+        acc = 0;
+        blockN = 0;
+      }
+      if (listening) {
+        // 12-bit wave to 16-bit audio (the gain screw on the board sets the loudness).
+        pcm[pcmN++] = (int16_t)constrain((int)(d * 16), -32768, 32767);
+        if (pcmN == 128) {
+          liveview_audio(pcm, pcmN);
+          pcmN = 0;
+        }
+      }
     }
-    float rms = sqrtf(acc / N);
-    float db = 20 * log10f(rms < 1 ? 1 : rms) + gCfg.micCal;
-    smooth = windows ? smooth + (db - smooth) * 0.012f : db;  // ~5 s
-    if (windows < 1000) windows++;
-    levelDb = smooth;
-    if (windows >= 40) stage = stageFor(smooth, stage);  // ~2 s to settle after boot
-    vTaskDelay(pdMS_TO_TICKS(10));  // let the idle task run (task watchdog)
+    if (!listening) pcmN = 0;
   }
 }
 
 void sound_begin() {
-  analogReadResolution(12);
-  analogSetPinAttenuation(MIC_PIN, ADC_11db);
+  adc_unit_t unit;
+  if (adc_continuous_io_to_channel(MIC_PIN, &unit, &channel) != ESP_OK || unit != ADC_UNIT_1) {
+    LOG("sound: GPIO %d is not an ADC1 pin, microphone off", MIC_PIN);
+    return;
+  }
+  adc_continuous_handle_cfg_t hc = {};
+  hc.max_store_buf_size = 2048;
+  hc.conv_frame_size = 256;
+  adc_digi_pattern_config_t pat = {};
+  pat.atten = ADC_ATTEN_DB_12;
+  pat.channel = channel;
+  pat.unit = ADC_UNIT_1;
+  pat.bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+  adc_continuous_config_t cfg = {};
+  cfg.pattern_num = 1;
+  cfg.adc_pattern = &pat;
+  cfg.sample_freq_hz = ADC_HZ;
+  cfg.conv_mode = ADC_CONV_SINGLE_UNIT_1;
+  cfg.format = MIC_FORMAT;
+  if (adc_continuous_new_handle(&hc, &adc) != ESP_OK || adc_continuous_config(adc, &cfg) != ESP_OK ||
+      adc_continuous_start(adc) != ESP_OK) {
+    LOG("sound: ADC start failed, microphone off");
+    return;
+  }
   // Core 0, low priority: WiFi preempts it; the screen (core 1) never waits for it.
   xTaskCreatePinnedToCore(micTask, "mic", 3072, nullptr, 1, nullptr, 0);
   LOG("sound: microphone on GPIO %d, calibration %d dB", MIC_PIN, gCfg.micCal);
