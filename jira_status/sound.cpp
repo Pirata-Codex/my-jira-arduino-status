@@ -39,6 +39,11 @@ float sound_db() { return levelDb; }
 #define MIC_CHANNEL(p) ((p)->type2.channel)
 #define MIC_VALUE(p) ((p)->type2.data)
 #endif
+#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S2
+#define MIC_UNIT_OK(p) true
+#else
+#define MIC_UNIT_OK(p) ((p)->type2.unit == 0)  // ADC1
+#endif
 
 static const int OVERSAMPLE = 8;           // ADC samples averaged into one audio sample
 static const int ADC_HZ = MIC_AUDIO_HZ * OVERSAMPLE;  // 64 kHz (the S3 goes up to 83 kHz)
@@ -62,19 +67,36 @@ static void micTask(void*) {
   static int16_t pcm[128];
   int pcmN = 0, pairN = 0, pairSum = 0, blockN = 0, windows = 0;
   float dc = 2048, acc = 0, smooth = 0, lp = 0;
-  // Diagnostics, logged every 30 s: samples per second and the raw range (bias, clipping, wiring).
-  uint32_t statAt = millis(), statN = 0;
+  // Diagnostics, logged every 30 s: samples per second, the raw average (the bias, ~1900-2300 when
+  // wired), its spread (noise), the range, and results that weren't our channel (decoding check).
+  uint32_t statAt = millis(), statN = 0, rawN = 0, foreign = 0;
+  int64_t rawSum = 0, rawSq = 0;
   int rawMin = 4095, rawMax = 0;
+  bool dumped = false;
   for (;;) {
     uint32_t got = 0;
     if (adc_continuous_read(adc, raw, sizeof(raw), &got, 1000) != ESP_OK) continue;  // blocks: lets others run
+    if (!dumped && got >= 32) {
+      // Once: the first 8 raw results as the ADC delivered them, to check the decoding by eye.
+      const uint32_t* w = (const uint32_t*)raw;
+      LOG("sound: first results %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx (channel %d)", (unsigned long)w[0],
+          (unsigned long)w[1], (unsigned long)w[2], (unsigned long)w[3], (unsigned long)w[4], (unsigned long)w[5],
+          (unsigned long)w[6], (unsigned long)w[7], (int)channel);
+      dumped = true;
+    }
     bool listening = liveview_listening();
     for (uint32_t i = 0; i + SOC_ADC_DIGI_RESULT_BYTES <= got; i += SOC_ADC_DIGI_RESULT_BYTES) {
       auto* p = (adc_digi_output_data_t*)&raw[i];
-      if (MIC_CHANNEL(p) != channel) continue;
+      if (MIC_CHANNEL(p) != channel || !MIC_UNIT_OK(p)) {
+        foreign++;
+        continue;
+      }
       int v = MIC_VALUE(p);
       if (v < rawMin) rawMin = v;
       if (v > rawMax) rawMax = v;
+      rawN++;
+      rawSum += v;
+      rawSq += (int64_t)v * v;
       pairSum += v;
       if (++pairN < OVERSAMPLE) continue;
       float x = (float)pairSum / OVERSAMPLE;
@@ -108,10 +130,14 @@ static void micTask(void*) {
     }
     if (!listening) pcmN = 0;
     if (millis() - statAt >= 30000) {
-      LOG("sound: %u samples/s, raw %d..%d, level %.0f dB", (unsigned)(statN * 1000 / (millis() - statAt)), rawMin,
-          rawMax, (float)levelDb);
+      double mean = rawN ? (double)rawSum / rawN : 0;
+      double spread = rawN ? sqrt(max(0.0, (double)rawSq / rawN - mean * mean)) : 0;
+      LOG("sound: %u samples/s, raw avg %.0f spread %.0f range %d..%d, foreign %lu, level %.0f dB",
+          (unsigned)(statN * 1000 / (millis() - statAt)), mean, spread, rawMin, rawMax, (unsigned long)foreign,
+          (float)levelDb);
       statAt = millis();
-      statN = 0;
+      statN = rawN = foreign = 0;
+      rawSum = rawSq = 0;
       rawMin = 4095;
       rawMax = 0;
     }
