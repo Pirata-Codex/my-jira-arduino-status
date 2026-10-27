@@ -88,7 +88,7 @@ Suggested bot commands: `/wfh [note]`, `/otw 09:40 [note]`, `/left [09:00]`, `/a
 
 ### ◢ Room sound level (MAX4466)
 
-A MAX4466 microphone measures the room all the time (on the second CPU core, so the screen never waits for it). The header shows a speaker icon in the stage's color, and the status line rotates in `ROOM: NORMAL · 52 DB`.
+A MAX4466 microphone measures the room all the time (on the second CPU core, so the screen never waits for it). The level shows in the stage's color in three places: `52dB` in the header (every page), a filled `52 dB` pill right of the clock on PULSE, and a **ROOM SOUND** tile on the health page (after the monitors) with the stage name and a 30-80 dB bar. The live view (`/stream`) shows it too, with a 2-minute graph.
 
 | Stage | Level | Color |
 |---|---|---|
@@ -177,9 +177,13 @@ USB is needed **once**. After that, update over WiFi:
 | `/refresh` | fetch everything now |
 | `/memory` | memory budget: estimate vs measured per feature, room right now |
 | `/screenshot` | the screen as a 480×320 BMP (redrawn once and streamed, no extra RAM) |
+| `/stream` | live view: the screen as it draws, plus the room sound level and a 2-minute graph (ESP32-S3 with PSRAM) |
+| `/stream.raw` | the data `/stream` draws: changed rectangles (RGB565) and the sound level once a second |
 | `/update` | firmware upload |
 
 All pages use the `admin` login.
+
+The live view keeps a copy of the screen in PSRAM (300 KB of the S3's 2 MB) while someone watches: the display never waits for the network, and internal RAM only carries a 3 KB task and the socket buffer. It sends only what changed, at most 10 times a second, so it's light while the screen is still and busier during page slides. One viewer at a time; a new one takes over. Boards without PSRAM answer `503`.
 
 ## ◢ Secrets
 

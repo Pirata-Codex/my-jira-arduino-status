@@ -30,7 +30,6 @@ static bool started = false;
 
 // header + tab bar (lv_layer_top, survive refreshes)
 static lv_obj_t *header, *hdPhrase, *hdHealth, *hdClock, *hdWifi[4], *hdDot, *hdSound;
-static int hdSoundStage = -2;  // stage the speaker icon shows (redrawn only when it changes)
 static lv_obj_t *tabBar, *tabLbl[PG_COUNT], *tabLine;
 static String hdPhraseText;
 // banner (meeting / outage)
@@ -39,6 +38,7 @@ static int bannerMode = -1;
 // Now
 static lv_obj_t *nowClock, *nowDate, *nowJalali, *nowMeet, *nowTlBar, *nowTlNow, *nowSprint, *nowDays, *nowRows;
 static lv_obj_t *nowLeg[4];
+static lv_obj_t *nowSnd, *nowSndLbl;  // room sound pill next to the clock
 // Sprint
 static lv_obj_t *spName, *spDays, *spBars[4], *spBarLbl[4], *spChart, *spFoot, *spBurnNote;
 static lv_chart_series_t *spSeries, *spIdeal;
@@ -67,6 +67,9 @@ struct HealthSlot { lv_obj_t *box, *outline, *dot, *name, *sub, *track, *fill; }
 constexpr int MAX_HEALTH_TILES = 8;
 static HealthSlot hlTiles[MAX_HEALTH_TILES];
 static int hlTilesBuilt = 0;
+static int hlMicSlot = -1;  // tile showing the room sound (-1: none)
+static bool hlMicOn = false;  // whether renderHealth laid the tiles out with the microphone
+static void renderSound(bool force);
 
 static const int CONTENT_Y = 40;      // between the header (0..36) and the tab bar (268..316)
 
@@ -393,14 +396,14 @@ static void buildHeader() {
   lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
   lv_anim_start(&a);
   hdPhrase = text(header, F_HUD, C_ICE, "");
-  lv_obj_set_size(hdPhrase, 128, 16);  // one line: long phrases end in "..." instead of wrapping
+  lv_obj_set_size(hdPhrase, 116, 16);  // one line: long phrases end in "..." instead of wrapping
   lv_label_set_long_mode(hdPhrase, LV_LABEL_LONG_DOT);
   lv_obj_set_pos(hdPhrase, 178, 9);
   hdHealth = hudText(header, F_HUD, C_LIME, "");
-  lv_obj_align(hdHealth, LV_ALIGN_RIGHT_MID, -110, 0);  // right edge at x 362
-  // Room sound: a speaker in the stage's color, between the Kuma count and the WiFi bars.
-  hdSound = text(header, F_HUD, C_DIM, LV_SYMBOL_AUDIO);
-  lv_obj_align(hdSound, LV_ALIGN_RIGHT_MID, -88, 0);  // right edge at x 384
+  lv_obj_align(hdHealth, LV_ALIGN_RIGHT_MID, -128, 0);  // right edge at x 344
+  // Room sound: "52dB" in the stage's color, between the Kuma count and the WiFi bars.
+  hdSound = text(header, F_HUD, C_DIM, "");
+  lv_obj_align(hdSound, LV_ALIGN_RIGHT_MID, -86, 0);  // right edge at x 386
   lv_obj_add_flag(hdSound, LV_OBJ_FLAG_HIDDEN);
   // WiFi bars sit in their own gap between the health count and the clock (clock starts ~x 414).
   for (int i = 0; i < 4; i++) hdWifi[i] = rect(header, 390 + i * 5, 24 - (4 + i * 3), 3, 4 + i * 3, C_DIM);
@@ -430,27 +433,29 @@ static void buildTabBar() {
 
 static void buildBanner() {
   // Opaque (screen color) so it covers the tab bar; the chamfered outline carries the alert color.
-  banner = plain(lv_layer_top(), 4, 266, 472, 50);
+  // 64 px tall: the tag line, then up to two lines of text (meeting title + room) before "...".
+  banner = plain(lv_layer_top(), 4, 252, 472, 64);
   lv_obj_set_style_bg_color(banner, C_BG, 0);
   lv_obj_set_style_bg_opa(banner, LV_OPA_COVER, 0);
-  int r = 471, b = 49, cut = 8;
+  int r = 471, b = 63, cut = 8;
   lv_point_precise_t p[9] = {{cut, 0}, {r - cut, 0}, {r, cut}, {r, b - cut}, {r - cut, b},
                              {cut, b}, {0, b - cut}, {0, cut}, {cut, 0}};
   bnLine = polyline(banner, p, 9, C_AMBER, 2);
-  bnBar = rect(banner, 0, 9, 4, 32, C_AMBER);
+  bnBar = rect(banner, 0, 10, 4, 44, C_AMBER);
   bnTag = hudText(banner, F_HUD, C_AMBER, "");
   lv_obj_set_pos(bnTag, 16, 5);
-  bnText = text(banner, F_BODY, C_TEXT, "");
-  lv_obj_set_width(bnText, 300);
+  bnText = text(banner, F_SMALL, C_TEXT, "");
+  lv_obj_set_size(bnText, 360, 40);  // two 20 px lines
   lv_label_set_long_mode(bnText, LV_LABEL_LONG_DOT);
   lv_obj_set_pos(bnText, 16, 21);
-  bnCount = plain(banner, 330, 16, 38, 18);
+  bnCount = plain(banner, 0, 0, 38, 18);
+  lv_obj_align(bnCount, LV_ALIGN_TOP_RIGHT, -12, 6);
   lv_obj_set_style_border_width(bnCount, 1, 0);
   lv_obj_set_style_border_color(bnCount, C_RED, 0);
   bnCountLbl = hudText(bnCount, F_HUD, C_RED, "1/2");
   lv_obj_center(bnCountLbl);
   bnRight = hudText(banner, F_HUD_L, C_AMBER, "");
-  lv_obj_align(bnRight, LV_ALIGN_RIGHT_MID, -12, 0);
+  lv_obj_align(bnRight, LV_ALIGN_RIGHT_MID, -12, 8);
   lv_obj_add_flag(banner, LV_OBJ_FLAG_HIDDEN);
 }
 
@@ -475,6 +480,11 @@ static void buildNow() {
   lv_obj_set_pos(nowJalali, 10, 56);
   nowDate = hudText(L, F_HUD, C_MUTED, "");
   lv_obj_set_pos(nowDate, 150, 60);
+  // Room sound right of the clock (which ends at x ~148): "52 dB" on the stage's color.
+  nowSnd = rect(L, 156, 14, 62, 24, C_DIM, 6);
+  nowSndLbl = text(nowSnd, F_HUD_M, C_BG, "");
+  lv_obj_center(nowSndLbl);
+  lv_obj_add_flag(nowSnd, LV_OBJ_FLAG_HIDDEN);
   for (int h = TL_START; h <= TL_END; h += 3) {
     lv_obj_t* l = hudText(L, F_HUD, C_MUTED, (h < 10 ? "0" + String(h) : String(h)).c_str());
     lv_obj_set_pos(l, TL_X + (h - TL_START) * TL_W / (TL_END - TL_START) - (h == TL_END ? 14 : 0), 78);
@@ -591,6 +601,7 @@ static void buildHealth() {
   lv_obj_align(hlSummary, LV_ALIGN_TOP_RIGHT, -12, CONTENT_Y + 2);
   hlGrid = plain(s, 6, CONTENT_Y + 20, 468, 204);
   hlTilesBuilt = 0;  // tiles are created by renderHealth as monitors appear
+  hlMicSlot = -1;
   hlMsg = makeMsg(hlGrid);
 }
 
@@ -733,6 +744,7 @@ static void renderNow(time_t now) {
     rect(nowTlBar, x0, 0, x1 - x0, 10, &m == next ? C_AMBER : C_LINE);
   }
   renderNowTime(now);
+  renderSound(true);
 
   const SprintData& s = snap.sprint;
   lv_label_set_text(nowSprint, sprintShort(s.name).c_str());
@@ -1030,6 +1042,8 @@ static void ensureHealthTiles(int n) {
 
 static void renderHealth() {
   const HealthData& h = snap.health;
+  hlMicSlot = -1;
+  hlMicOn = sound_stage() != SND_NONE;
   if (!h.ok && !h.count) {
     for (int i = 0; i < hlTilesBuilt; i++) lv_obj_add_flag(hlTiles[i].box, LV_OBJ_FLAG_HIDDEN);
     String err = "KUMA: " + h.err;
@@ -1040,10 +1054,15 @@ static void renderHealth() {
   setMsg(hlMsg, nullptr);
   float upSum = 0;
   int upN = 0;
-  ensureHealthTiles(min(h.count, MAX_HEALTH_TILES));
+  // The room sound gets the tile after the monitors (with 8 monitors, the 8th makes room for it).
+  bool mic = hlMicOn;
+  int shown = min(h.count, MAX_HEALTH_TILES - (mic ? 1 : 0));
+  if (mic) hlMicSlot = shown;
+  ensureHealthTiles(shown + (mic ? 1 : 0));
   for (int i = 0; i < hlTilesBuilt; i++) {
     HealthSlot& t = hlTiles[i];
-    if (i >= h.count) { lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN); continue; }
+    if (i == hlMicSlot) continue;  // renderSound fills it
+    if (i >= shown) { lv_obj_add_flag(t.box, LV_OBJ_FLAG_HIDDEN); continue; }
     const Monitor& m = h.m[i];
     lv_obj_set_style_line_color(t.outline, m.up ? C_LINE : C_RED, 0);
     lv_obj_set_style_bg_color(t.dot, m.up ? C_LIME : C_RED, 0);
@@ -1072,6 +1091,68 @@ static void renderHealth() {
   if (upN) sum += " · 24H " + String(100 * upSum / upN, 2) + "%";
   lv_label_set_text(hlSummary, sum.c_str());
   lv_obj_set_style_text_color(hlSummary, h.up == h.count ? C_LIME : C_RED, 0);
+  renderSound(true);
+}
+
+// ---------- room sound: header, PULSE pill, health tile ----------
+
+static lv_color_t soundColor(int stage) {
+  switch (stage) {
+    case SND_FOCUS: return C_LIME;
+    case SND_NORMAL: return C_CYAN;
+    case SND_DISTRACTING: return C_AMBER;
+    default: return C_RED;
+  }
+}
+
+// Called every second; redraws only when the shown dB or stage changes (force: a page was rebuilt).
+static void renderSound(bool force) {
+  static int shownDb = -1000, shownStage = -2;
+  SoundStage st = sound_stage();
+  int db = st == SND_NONE ? 0 : (int)(sound_db() + 0.5f);
+  if (!force && db == shownDb && st == shownStage) return;
+  shownDb = db;
+  shownStage = st;
+  bool on = st != SND_NONE;
+  lv_color_t c = on ? soundColor(st) : C_DIM;
+  if (!on) {
+    lv_obj_add_flag(hdSound, LV_OBJ_FLAG_HIDDEN);
+  } else {
+    lv_label_set_text_fmt(hdSound, "%ddB", db);
+    lv_obj_set_style_text_color(hdSound, c, 0);
+    lv_obj_remove_flag(hdSound, LV_OBJ_FLAG_HIDDEN);
+  }
+  if (screens[PG_NOW]) {
+    if (!on) {
+      lv_obj_add_flag(nowSnd, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_label_set_text_fmt(nowSndLbl, "%d dB", db);
+      lv_obj_set_style_bg_color(nowSnd, c, 0);
+      lv_obj_remove_flag(nowSnd, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+  if (screens[PG_HEALTH]) {
+    if (on != hlMicOn) {  // the microphone just came up: make room for its tile
+      renderHealth();  // calls back with force
+      return;
+    }
+    if (hlMicSlot >= 0 && hlMicSlot < hlTilesBuilt) {
+      HealthSlot& t = hlTiles[hlMicSlot];
+      lv_obj_set_style_line_color(t.outline, st == SND_TOO_LOUD ? C_RED : C_LINE, 0);
+      lv_obj_set_style_bg_color(t.dot, c, 0);
+      lv_obj_set_style_text_font(t.name, F_HUD_M, 0);
+      lv_obj_set_style_text_color(t.name, C_TEXT, 0);
+      lv_label_set_text(t.name, "ROOM SOUND");
+      lv_label_set_text_fmt(t.sub, "%d dB · %s", db, sound_name(st));
+      lv_obj_set_style_text_color(t.sub, c, 0);
+      // Bar: 30 dB (silent) to 80 dB (shouting).
+      lv_obj_remove_flag(t.track, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_remove_flag(t.fill, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_set_width(t.fill, constrain((db - 30) * 70 / 50, 1, 70));
+      lv_obj_set_style_bg_color(t.fill, c, 0);
+      lv_obj_remove_flag(t.box, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
 }
 
 static void renderAll(time_t now) {
@@ -1672,7 +1753,7 @@ static void updateBanner(time_t now) {
   lv_label_set_text(bnTag, a.tag.c_str());
   lv_label_set_text(bnText, a.text.c_str());
   lv_label_set_text(bnRight, a.right.c_str());
-  lv_obj_align(bnRight, LV_ALIGN_RIGHT_MID, -12, 0);
+  lv_obj_align(bnRight, LV_ALIGN_RIGHT_MID, -12, 8);
   if (alertCount > 1) {
     lv_obj_remove_flag(bnCount, LV_OBJ_FLAG_HIDDEN);
     lv_label_set_text_fmt(bnCountLbl, "%d/%d", alertIdx + 1, alertCount);
@@ -1705,7 +1786,7 @@ static String fridayPhrase(const struct tm& lt) {
     return String(p[curStatus]) + ", " + gCfg.ownerName;
   }
   const SprintData& s = snap.sprint;
-  switch ((millis() / 8000) % 5) {
+  switch ((millis() / 8000) % 4) {
     case 0: {
       int h = lt.tm_hour;
       const char* g = h < 5 ? "LATE SHIFT, " : h < 12 ? "GOOD MORNING, " : h < 17 ? "GOOD AFTERNOON, " : h < 22 ? "GOOD EVENING, " : "LATE SHIFT, ";
@@ -1720,10 +1801,6 @@ static String fridayPhrase(const struct tm& lt) {
       for (int i = 0; i < s.count; i++) if (s.cards[i].cat != CAT_DONE) open++;
       return String(open) + " CARDS IN FLIGHT";
     }
-    case 4:
-      if (sound_stage() != SND_NONE)
-        return String("ROOM: ") + sound_name(sound_stage()) + " · " + String((int)(sound_db() + 0.5f)) + " DB";
-      // fall through: no microphone
     default:
       if (snap.mock) return "DEMO DATA";
       return s.updated ? "SYNCED " + hhmm(s.updated) : "AWAITING SYNC";
@@ -1746,17 +1823,7 @@ static void updateHeader(time_t now, const struct tm& lt) {
   int bars = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : rssi > -85 ? 1 : 0;
   for (int i = 0; i < 4; i++) lv_obj_set_style_bg_color(hdWifi[i], !wifi ? C_RED : i < bars ? C_CYAN : C_DIM, 0);
   lv_obj_set_style_bg_color(hdDot, wifi ? C_LIME : C_RED, 0);
-  SoundStage snd = sound_stage();
-  if (snd != hdSoundStage) {
-    hdSoundStage = snd;
-    static const lv_color_t cols[] = {C_LIME, C_CYAN, C_AMBER, C_RED};
-    if (snd == SND_NONE) {
-      lv_obj_add_flag(hdSound, LV_OBJ_FLAG_HIDDEN);
-    } else {
-      lv_obj_set_style_text_color(hdSound, cols[snd], 0);
-      lv_obj_remove_flag(hdSound, LV_OBJ_FLAG_HIDDEN);
-    }
-  }
+  renderSound(false);
 }
 
 // ---------- loop ----------
@@ -1789,6 +1856,7 @@ static void forgetPageSlots(int p) {
   } else if (p == PG_HEALTH) {
     hlGrid = nullptr;
     hlTilesBuilt = 0;
+    hlMicSlot = -1;
   }
 }
 

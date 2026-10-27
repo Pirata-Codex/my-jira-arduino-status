@@ -1,0 +1,12 @@
+#pragma once
+#include <Arduino.h>
+#include <WiFi.h>
+#include <lvgl.h>
+
+// Live view of the screen (/stream in the browser), with the room sound level next to it. Needs
+// PSRAM (ESP32-S3): the board keeps a copy of the screen there while someone watches; without
+// PSRAM /stream says so and nothing changes.
+void stream_capture(const lv_area_t* area, const uint8_t* px);  // from the display flush
+// Takes over the request's connection and streams to it (replaces the previous viewer).
+// False when there's no PSRAM for the copy.
+bool stream_start(WiFiClient& c);

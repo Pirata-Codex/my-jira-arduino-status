@@ -14,6 +14,7 @@
 #include "memory.h"
 #include "rfid.h"
 #include "sound.h"
+#include "stream.h"
 
 #if !LV_USE_TFT_ESPI || !LV_USE_CHART || !LV_FONT_MONTSERRAT_48
 #error "LVGL is using another lv_conf.h. Copy extras/lv_conf.h over Documents/Arduino/libraries/lv_conf.h"
@@ -90,6 +91,7 @@ static void flushWithCapture(lv_display_t* disp, const lv_area_t* area, uint8_t*
   tft->setAddrWindow(area->x1, area->y1, w, h);
   tft->pushColors((uint16_t*)px, w * h, true);
   tft->endWrite();
+  stream_capture(area, px);
   if (shotClient && area->x1 == 0 && (int)w == lv_display_get_horizontal_resolution(disp) && area->y1 == shotRow) {
     shotClient->write(px, w * h * 2);
     shotRow = area->y2 + 1;

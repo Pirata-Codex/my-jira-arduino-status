@@ -5,6 +5,7 @@
 #include "model.h"
 #include "ui.h"
 #include "memory.h"
+#include "stream.h"
 #include <lvgl.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -15,6 +16,61 @@
 static WebServer server(80);
 size_t display_screenshot(WiFiClient& c);  // jira_status.ino
 static HTTPUpdateServer updater;
+
+// Live view page: the screen, drawn from the board's stream, and the room sound level beside it.
+static const char STREAM_PAGE[] PROGMEM = R"HTML(<!doctype html><meta charset=utf-8>
+<meta name=viewport content="width=device-width,initial-scale=1"><title>F.R.I.D.A.Y. live</title>
+<style>body{margin:0;background:#060D16;color:#ECEEF4;font:14px ui-monospace,monospace;padding:16px}
+#w{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+canvas#s{width:100%;max-width:960px;image-rendering:pixelated;border:1px solid #1C6A80;border-radius:8px}
+#m{border:1px solid #1C6A80;border-radius:8px;padding:12px;min-width:220px}
+#db{font-size:44px}#st{font-size:16px;letter-spacing:2px}#g{width:220px;height:80px;display:block;margin-top:10px}
+#i{color:#86AABA;margin-top:10px}a{color:#22D3EE}</style>
+<div id=w><canvas id=s width=480 height=320></canvas>
+<div id=m>ROOM SOUND<div id=db>--</div><div id=st></div><canvas id=g width=220 height=80></canvas>
+<div style="color:#86AABA">last 2 minutes</div></div></div>
+<div id=i>connecting...</div><p><a href=/>Settings</a> · <a href=/screenshot>Screenshot</a></p>
+<script>
+const cv=document.getElementById('s'),cx=cv.getContext('2d'),info=document.getElementById('i');
+const g=document.getElementById('g'),gx=g.getContext('2d'),dbE=document.getElementById('db'),stE=document.getElementById('st');
+const NAMES=['FOCUS','NORMAL','DISTRACTING','TOO LOUD'],COLS=['#A3E635','#22D3EE','#F5A623','#FF4D5E'];
+let hist=[],bytes=0,frames=0;
+function sound(db,st){
+  if(st<0){dbE.textContent='--';stE.textContent='NO MICROPHONE';return}
+  dbE.textContent=db.toFixed(0)+' dB';dbE.style.color=stE.style.color=COLS[st];stE.textContent=NAMES[st];
+  hist.push([db,st]);if(hist.length>120)hist.shift();
+  gx.clearRect(0,0,220,80);
+  hist.forEach((h,k)=>{const y=Math.max(2,Math.min(78,80-(h[0]-30)*80/50));gx.fillStyle=COLS[h[1]];gx.fillRect(k*220/120,y,2,80-y)});
+}
+async function run(){
+  const r=await fetch('/stream.raw',{cache:'no-store'});
+  if(!r.ok){info.textContent=await r.text();return false}
+  const rd=r.body.getReader();let chunks=[],have=0;
+  async function take(n){
+    while(have<n){const {value,done}=await rd.read();if(done)throw new Error('closed');chunks.push(value);have+=value.length;bytes+=value.length}
+    const out=new Uint8Array(n);let o=0;
+    while(o<n){const c=chunks[0],k=Math.min(c.length,n-o);out.set(c.subarray(0,k),o);o+=k;
+      if(k===c.length)chunks.shift();else chunks[0]=c.subarray(k)}
+    have-=n;return out}
+  const hd=await take(8);const v=new DataView(hd.buffer);
+  cv.width=v.getUint16(4,true);cv.height=v.getUint16(6,true);
+  info.textContent='live';
+  for(;;){
+    const t=(await take(1))[0];
+    if(t===1){
+      const h=new DataView((await take(8)).buffer),x=h.getUint16(0,true),y=h.getUint16(2,true),w=h.getUint16(4,true),hh=h.getUint16(6,true);
+      const px=await take(w*hh*2),img=cx.createImageData(w,hh),d=img.data;
+      for(let i=0,j=0;i<px.length;i+=2,j+=4){const c=px[i]|px[i+1]<<8;
+        d[j]=(c>>8&0xF8)|c>>13;d[j+1]=(c>>3&0xFC)|(c>>9&3);d[j+2]=(c<<3&0xF8)|(c>>2&7);d[j+3]=255}
+      cx.putImageData(img,x,y);frames++;
+    }else if(t===2){
+      const p=new DataView((await take(3)).buffer);sound(p.getUint16(0,true)/10,p.getInt8(2));
+    }else throw new Error('bad packet');
+  }
+}
+setInterval(()=>{if(info.textContent.startsWith('live'))info.textContent='live · '+(bytes/1024).toFixed(0)+' KB/s · '+frames+' updates/s';bytes=frames=0},1000);
+(async()=>{for(;;){try{if(await run()===false)return}catch(e){info.textContent='reconnecting...'}await new Promise(r=>setTimeout(r,2000))}})();
+</script>)HTML";
 
 static String esc(const String& s) {
   String o;
@@ -192,6 +248,18 @@ void web_begin() {
     server.send(200, "image/bmp", "");
     WiFiClient c = server.client();
     display_screenshot(c);
+  });
+  // Live view: /stream is the page, /stream.raw the data it draws (see stream.cpp).
+  server.on("/stream", HTTP_GET, [] {
+    if (!auth()) return;
+    server.sendHeader("Cache-Control", "no-store");
+    server.send_P(200, "text/html", STREAM_PAGE);
+  });
+  server.on("/stream.raw", HTTP_GET, [] {
+    if (!auth()) return;
+    WiFiClient c = server.client();
+    if (!stream_start(c))
+      server.send(503, "text/plain", "Live view needs PSRAM (ESP32-S3 with PSRAM enabled in Tools > PSRAM).");
   });
   updater.setup(&server, "/update", "admin", gCfg.webPass.c_str());
   server.begin();
