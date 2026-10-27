@@ -14,7 +14,7 @@
 #include "memory.h"
 #include "rfid.h"
 #include "sound.h"
-#include "stream.h"
+#include "liveview.h"
 
 #if !LV_USE_TFT_ESPI || !LV_USE_CHART || !LV_FONT_MONTSERRAT_48
 #error "LVGL is using another lv_conf.h. Copy extras/lv_conf.h over Documents/Arduino/libraries/lv_conf.h"

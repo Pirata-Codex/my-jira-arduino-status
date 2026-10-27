@@ -1,4 +1,5 @@
 #pragma once
+// (Not "stream.h": Windows file names ignore case, and that would hide the core's Stream.h.)
 #include <Arduino.h>
 #include <WiFi.h>
 #include <lvgl.h>

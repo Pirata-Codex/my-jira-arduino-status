@@ -5,7 +5,7 @@
 #include "model.h"
 #include "ui.h"
 #include "memory.h"
-#include "stream.h"
+#include "liveview.h"
 #include <lvgl.h>
 #include <WiFi.h>
 #include <WebServer.h>
@@ -249,7 +249,7 @@ void web_begin() {
     WiFiClient c = server.client();
     display_screenshot(c);
   });
-  // Live view: /stream is the page, /stream.raw the data it draws (see stream.cpp).
+  // Live view: /stream is the page, /stream.raw the data it draws (see liveview.cpp).
   server.on("/stream", HTTP_GET, [] {
     if (!auth()) return;
     server.sendHeader("Cache-Control", "no-store");
