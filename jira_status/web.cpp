@@ -55,15 +55,19 @@ lb.onclick=()=>{
   if(ctl)ctl.abort();
 };
 vol.oninput=()=>{if(gain)gain.gain.value=+vol.value};
-// Noise gate: the hiss between words is turned down. floor follows the quietest chunks (and creeps
-// up slowly, so it adapts to the room); a chunk well above it opens the gate.
-let prev=0,floor=0,gate=1;
+// Noise gate: silence between sounds. floor is the background noise level: it drops quickly to
+// quieter chunks and rises slowly with noise-like ones, so crackle doesn't open the gate and voices
+// never move it. A sound clearly above it (lvl, smoothed over ~50 ms) opens the gate, which stays
+// open ~0.3 s after it, so words don't get chopped.
+let prev=0,floor=0,lvl=0,hold=0,gate=1;
 function audio(b){
   if(!listen||!actx)return;
   const n=b.length/2,dv=new DataView(b.buffer),f=new Float32Array(n*3);
   let sq=0;for(let i=0;i<n;i++){const s=dv.getInt16(i*2,true);sq+=s*s}
-  const rms=Math.sqrt(sq/n)||1;floor=!floor||rms<floor?rms:floor*1.003;
-  const want=!gt.checked||rms>floor*3?1:0.06,g0=gate;gate+=(want-gate)*(want>gate?0.6:0.08);
+  const rms=Math.sqrt(sq/n)||1;lvl=lvl?lvl+(rms-lvl)*0.4:rms;
+  if(!floor)floor=rms;else if(rms<floor)floor+=(rms-floor)*0.2;else if(rms<floor*2)floor+=(rms-floor)*0.01;else floor*=1.0005;
+  if(lvl>floor*4)hold=20;else if(hold)hold--;
+  const want=!gt.checked||hold?1:0,g0=gate;gate+=(want-gate)*(want>gate?0.6:0.15);
   // 8 kHz to 24 kHz (linear), a rate every browser accepts for a buffer. prev carries over chunks.
   for(let i=0;i<n;i++){const s=dv.getInt16(i*2,true)/32768*(g0+(gate-g0)*i/n);for(let k=0;k<3;k++)f[i*3+k]=prev+(s-prev)*(k+1)/3;prev=s}
   const ab=actx.createBuffer(1,f.length,24000);ab.copyToChannel(f,0);

@@ -31,6 +31,15 @@ static volatile bool wantAudio = false;
 
 bool liveview_listening() { return live && wantAudio; }
 
+// WiFi power save switches the radio on and off around every beacon; those current pulses reach the
+// microphone as a radio-like crackle. While someone listens the radio stays on (steady current).
+static bool radioAwake = false;
+static void keepRadioAwake(bool on) {
+  if (on == radioAwake) return;
+  radioAwake = on;
+  WiFi.setSleep(!on);
+}
+
 // Microphone task (one writer); the stream task reads. Both indexes only grow.
 void liveview_audio(const int16_t* s, int n) {
   if (!ring) return;
@@ -137,7 +146,10 @@ static void streamTask(void*) {
     }
     if (!ok) {
       LOG("stream: viewer left");
-      if (!uxQueueMessagesWaiting(handoff)) live = false;  // a new viewer keeps it on
+      if (!uxQueueMessagesWaiting(handoff)) {  // a new viewer keeps it on
+        live = false;
+        keepRadioAwake(false);
+      }
       c->stop();
       delete c;
       c = nullptr;
@@ -174,6 +186,7 @@ bool stream_start(WiFiClient& client, bool audio) {
   ringR = ringW;  // audio starts now, not with what's left in the ring
   wantAudio = audio && ring;
   live = true;
+  keepRadioAwake(wantAudio);
   // One full redraw fills the mirror (and goes out as the first frame).
   lv_obj_invalidate(lv_screen_active());
   LOG("stream: viewer connected%s", wantAudio ? ", listening" : "");
