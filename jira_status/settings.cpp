@@ -1,5 +1,6 @@
 #include "settings.h"
 #include <Preferences.h>
+#include "config.h"
 
 Settings gCfg;
 static Preferences prefs;
@@ -26,6 +27,7 @@ void settings_load() {
   snprintf(def, sizeof(def), "%06llx", ESP.getEfuseMac() & 0xFFFFFF);
   gCfg.webPass = prefs.getString("webPass", def);
   gCfg.brightness = prefs.getUChar("bright", 200);
+  gCfg.ledBright = prefs.getUChar("ledBright", LED_BRIGHTNESS);
   gCfg.rotateSec = prefs.getUShort("rotate", 12);
   gCfg.refreshMin = prefs.getUShort("refresh", 15);
   gCfg.kumaMin = prefs.getUShort("kumaMin", 5);
@@ -62,6 +64,7 @@ void settings_save() {
   prefs.putString("icsUrl2", gCfg.icsUrl2);
   prefs.putString("webPass", gCfg.webPass);
   prefs.putUChar("bright", gCfg.brightness);
+  prefs.putUChar("ledBright", gCfg.ledBright);
   prefs.putUShort("rotate", gCfg.rotateSec);
   prefs.putUShort("refresh", gCfg.refreshMin);
   prefs.putUShort("kumaMin", gCfg.kumaMin);

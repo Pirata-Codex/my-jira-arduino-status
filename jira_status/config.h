@@ -49,6 +49,13 @@
 #define SOUND_FOCUS_MAX 45        // below: FOCUS (quiet enough for deep work)
 #define SOUND_NORMAL_MAX 58       // below: NORMAL (usual office noise)
 #define SOUND_DISTRACTING_MAX 70  // below: DISTRACTING; above: TOO LOUD
+// LED ring (led.cpp): WS2812B, e.g. a 16-LED WCMCU-2812B-16. VCC to 5V, DIN through 330 ohm to LED_PIN.
+// Needs the library Adafruit NeoPixel. LED_ENABLED 0 turns it off.
+#define LED_ENABLED 1
+#define LED_PIN 18
+#define LED_COUNT 16
+#define LED_MIC_INDEX 0     // the LED that lights red while someone listens on /stream
+#define LED_BRIGHTNESS 50   // default for the settings page; 16 LEDs at 50 draw ~190 mA at most
 // Daily restart for a clean heap (local hour; -1 turns it off).
 #define NIGHTLY_RESTART_HOUR 4
 

@@ -191,6 +191,7 @@ static void handleRoot() {
        "<small>Paste -----BEGIN CERTIFICATE----- ... to verify the server. Empty = connect without checking it.</small></label>";
   h += F("<h2>Display</h2>");
   h += field("bright", "Brightness (0-255)", String(gCfg.brightness), "", "number");
+  h += field("ledBright", "LED ring brightness (0-255)", String(gCfg.ledBright), "0 = off. About 50 is plenty", "number");
   h += field("rotate", "Seconds per screen", String(gCfg.rotateSec), "", "number");
   h += field("refresh", "Refresh Jira + calendar every (minutes)", String(gCfg.refreshMin), "The dashboard pauses for a few seconds while it refreshes", "number");
   h += field("kumaMin", "Refresh Kuma health every (minutes)", String(gCfg.kumaMin), "", "number");
@@ -230,6 +231,7 @@ static void handleSave() {
   gCfg.rfidUids = arg("rfidUids");
   gCfg.micCal = constrain(arg("micCal").toInt(), -40, 90);
   gCfg.brightness = constrain(arg("bright").toInt(), 10, 255);
+  gCfg.ledBright = constrain(arg("ledBright").toInt(), 0, 255);
   gCfg.rotateSec = constrain(arg("rotate").toInt(), 4, 120);
   gCfg.refreshMin = constrain(arg("refresh").toInt(), 2, 240);
   gCfg.kumaMin = constrain(arg("kumaMin").toInt(), 1, 240);

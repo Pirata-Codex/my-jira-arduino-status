@@ -4,6 +4,7 @@
 #include "model.h"
 #include "fetch.h"
 #include "ui.h"
+#include "led.h"
 
 #if RFID_ENABLED
 #include <SPI.h>
@@ -54,6 +55,7 @@ void rfid_loop() {
   if (!isMine(uid)) {
     LOG("rfid: badge %s is not in the settings (Badge ids)", uid.c_str());
     ui_toast("UNKNOWN BADGE " + uid, 6000);
+    led_notify(LED_AMBER);
     return;
   }
   // Arriving or leaving: whatever the board shows now, the tap flips between IN and LEFT.
@@ -65,6 +67,7 @@ void rfid_loop() {
   LOG("rfid: badge %s, %s -> %s", uid.c_str(), code.length() ? code.c_str() : "(none)", next);
   fetch_set_status(next);
   ui_toast(here ? "SEE YOU, " + gCfg.ownerName : "WELCOME BACK, " + gCfg.ownerName, 5000);
+  led_notify(here ? LED_VIOLET : LED_LIME);
 }
 
 #else

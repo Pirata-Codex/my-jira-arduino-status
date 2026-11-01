@@ -8,6 +8,7 @@
 #include "memory.h"
 #include "sound.h"
 #include "liveview.h"
+#include "led.h"
 
 static void freePageNow(int p);  // frees a dashboard page at once (defined with the page lifecycle)
 
@@ -1670,6 +1671,7 @@ struct Alert { int mode; String tag, text, right; };
 static const int MAX_ALERTS = 6;
 static Alert alerts[MAX_ALERTS];
 static int alertCount = 0, alertIdx = 0;
+static long soonSec = -1;  // seconds to the next meeting while it's "soon", else -1 (LED ring)
 static uint32_t alertShownAt = 0;
 
 static void bnPulseCb(void*, int32_t v) {
@@ -1715,6 +1717,7 @@ static void addAlert(int mode, const String& tag, const String& text, const Stri
 
 static void collectAlerts(time_t now) {
   alertCount = 0;
+  soonSec = -1;
   bool away = curStatus != ST_NONE;  // while you're away the board is for colleagues: outages only
   for (int i = 0; !away && i < snap.meet.count; i++) {
     const Meeting& m = snap.meet.m[i];
@@ -1732,9 +1735,25 @@ static void collectAlerts(time_t now) {
   for (int i = 0; !away && i < snap.meet.count; i++) {
     const Meeting& m = snap.meet.m[i];
     long until = m.start - now;
-    if (until > 0 && until <= MEETING_SOON_SEC)
+    if (until > 0 && until <= MEETING_SOON_SEC) {
+      if (soonSec < 0 || until < soonSec) soonSec = until;
       addAlert(BN_SOON, LV_SYMBOL_BELL " NEXT MEETING · " + hhmm(m.start), m.title + (m.where.length() ? " · " + m.where : ""), mmss(until));
+    }
   }
+}
+
+// LED ring: the most urgent alert, else your presence, else the idle look.
+static void updateLeds() {
+  bool down = false, live = false;
+  for (int i = 0; i < alertCount; i++) {
+    down |= alerts[i].mode == BN_DOWN;
+    live |= alerts[i].mode == BN_STARTED;
+  }
+  if (down) led_scene(LED_DOWN);
+  else if (live) led_scene(LED_LIVE);
+  else if (soonSec >= 0) led_scene(LED_SOON, (float)soonSec / MEETING_SOON_SEC);
+  else led_scene(curStatus != ST_NONE ? LED_AWAY : LED_IDLE);
+  led_mic(liveview_listening());
 }
 
 static void updateBanner(time_t now) {
@@ -1983,6 +2002,7 @@ void ui_tick() {
       lv_label_set_text(nowJalali, jalaliDate(lt).c_str());
     }
     updateBanner(now);
+    updateLeds();
     updateHeader(now, lt);
     if (lt.tm_sec == 0) {  // meeting countdown, "now" marker, agenda states
       if (screens[PG_NOW]) renderNowTime(now);

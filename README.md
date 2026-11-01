@@ -114,6 +114,29 @@ Tap your badge on the reader next to the board when you arrive and when you leav
 
 Install the library **MFRC522** (by GithubCommunity). Tap an unknown badge once: the header shows `UNKNOWN BADGE 04A1B2C3`; put that id in **Badge ids** on the settings page (several ids: comma separated). Pins are in `config.h`; `RFID_ENABLED 0` turns it off.
 
+### ◢ LED ring (WS2812B)
+
+A 16-LED ring (WCMCU-2812B-16 or any WS2812B strip) shows the alerts as light, so you see them from across the room:
+
+| Ring | Meaning |
+|---|---|
+| cyan arcs going around | all quiet (amber / red while the room is DISTRACTING / TOO LOUD) |
+| violet, breathing | a presence status is set (WFH, on the way, left, away) |
+| amber arc, shrinking | a meeting starts soon; the lit part is the time left |
+| red pulse | a meeting has started |
+| red arcs spinning fast | a service is down |
+| one red LED | someone listens on `/stream` |
+
+Badge taps flash it: lime for welcome back, violet for see you, amber for an unknown badge. A new, more urgent alert starts with a sweep in its color.
+
+| Ring | ESP32-S3 |
+|---|---|
+| VCC (IN side) | 5V (USB 5V / VIN, or the boost output) |
+| GND | GND |
+| IN | 330 Ω → GPIO 18 |
+
+Install the library **Adafruit NeoPixel** (by Adafruit). Put a 100 µF capacitor across the ring's VCC and GND. **LED ring brightness** is on the settings page (default 50, 0 = off): at 50 the 16 LEDs draw about 190 mA at most, at full white 255 almost 1 A. Pin, LED count and the mic LED are in `config.h`; `LED_ENABLED 0` turns it off.
+
 ## ◢ Systems
 
 ```

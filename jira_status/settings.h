@@ -17,6 +17,7 @@ struct Settings {
   String icsUrl;      // published calendar (.ics) for meetings (optional)
   String webPass;     // settings page / OTA password (user "admin")
   uint8_t brightness; // 0..255
+  uint8_t ledBright;  // LED ring, 0..255 (0 = off)
   uint16_t rotateSec; // seconds per screen
   uint16_t refreshMin; // minutes between full data refreshes (Jira, calendar, Kuma)
   uint16_t kumaMin;    // minutes between Uptime Kuma-only refreshes
