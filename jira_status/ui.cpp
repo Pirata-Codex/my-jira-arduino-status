@@ -1752,7 +1752,7 @@ static void collectAlerts(time_t now) {
   }
 }
 
-// LED ring: the most urgent alert, else your presence, else the idle look.
+// Light window: the most urgent alert, else dark.
 static void updateLeds() {
   bool down = false, live = false;
   for (int i = 0; i < alertCount; i++) {
@@ -1762,8 +1762,7 @@ static void updateLeds() {
   if (down) led_scene(LED_DOWN);
   else if (live) led_scene(LED_LIVE);
   else if (soonSec >= 0) led_scene(LED_SOON, (float)soonSec / MEETING_SOON_SEC);
-  else led_scene(curStatus != ST_NONE ? LED_AWAY : LED_IDLE);
-  led_mic(liveview_listening());
+  else led_scene(LED_IDLE);
 }
 
 static void updateBanner(time_t now) {

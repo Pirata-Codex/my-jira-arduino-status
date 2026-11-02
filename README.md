@@ -116,18 +116,16 @@ Install the library **MFRC522** (by GithubCommunity). Tap an unknown badge once:
 
 ### ◢ Light window (4×4 WS2812B)
 
-A 4×4 grid (WCMCU-2812B-16) behind a frosted cover beside the screen shows the alerts as 16 soft pixels, so you see them from across the room:
+A 4×4 grid (WCMCU-2812B-16) behind a frosted cover beside the screen. It stays dark while all is fine, so any light means "look at the screen":
 
-| Pixels | Meaning |
+| Grid | Meaning |
 |---|---|
-| an orange dot circling the edge | all quiet (amber / red while the room is DISTRACTING / TOO LOUD) |
-| violet, breathing | a presence status is set (WFH, on the way, left, away) |
-| amber rows draining from the top | a meeting starts soon; the lit rows are the time left |
+| dark | all fine |
+| amber, filling up from the bottom | a meeting starts soon; full = it starts now (one pixel ≈ 19 s of the last 5 minutes) |
 | every pixel pulsing red | a meeting has started |
 | a blinking red X | a service is down |
-| bottom-left pixel red | someone listens on `/stream` |
 
-Badge taps flash it: a lime check for welcome back, a violet sweep for see you, an amber X for an unknown badge. A new, more urgent alert starts with a sweep in its color; a low battery flashes red.
+Short flashes: a lime check for welcome back, violet for see you, an amber X for an unknown badge, the bottom row red for a low battery. A new alert starts with a sweep in its color.
 
 | Grid | ESP32-S3 |
 |---|---|

@@ -72,7 +72,7 @@ void battery_loop() {
     warned = true;
     LOG("battery: low, %.2f V", volts);
     ui_toast("BATTERY LOW, DOCK ME", 8000);
-    led_notify(LED_RED);
+    led_notify(LED_RED, LED_BOTTOM);
   }
   if (percent > 20 || docked) warned = false;
 }
