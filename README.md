@@ -101,7 +101,7 @@ The ADC samples the microphone continuously (DMA, 16 kHz averaged to 8 kHz), whi
 
 ### ◢ Badge reader (RC522)
 
-Tap your badge on the reader next to the board when you arrive and when you leave: it flips your status between `IN` (normal dashboard) and `LEFT` (with its usual 06:00 expiry), through the same Jira property. The header confirms with `WELCOME BACK` / `SEE YOU`; the screen changes at once and the write to Jira follows within seconds (retried until it goes through).
+Tap your badge on the dock's front ledge when you arrive and when you leave: it flips your status between `IN` (normal dashboard) and `LEFT` (with its usual 06:00 expiry), through the same Jira property. The header confirms with `WELCOME BACK` / `SEE YOU`; the screen changes at once and the write to Jira follows within seconds (retried until it goes through).
 
 | RC522 | ESP32-S3 |
 |---|---|
@@ -114,28 +114,36 @@ Tap your badge on the reader next to the board when you arrive and when you leav
 
 Install the library **MFRC522** (by GithubCommunity). Tap an unknown badge once: the header shows `UNKNOWN BADGE 04A1B2C3`; put that id in **Badge ids** on the settings page (several ids: comma separated). Pins are in `config.h`; `RFID_ENABLED 0` turns it off.
 
-### ◢ LED ring (WS2812B)
+### ◢ Light window (4×4 WS2812B)
 
-A 16-LED ring (WCMCU-2812B-16 or any WS2812B strip) shows the alerts as light, so you see them from across the room:
+A 4×4 grid (WCMCU-2812B-16) behind a frosted cover beside the screen shows the alerts as 16 soft pixels, so you see them from across the room:
 
-| Ring | Meaning |
+| Pixels | Meaning |
 |---|---|
-| cyan arcs going around | all quiet (amber / red while the room is DISTRACTING / TOO LOUD) |
+| an orange dot circling the edge | all quiet (amber / red while the room is DISTRACTING / TOO LOUD) |
 | violet, breathing | a presence status is set (WFH, on the way, left, away) |
-| amber arc, shrinking | a meeting starts soon; the lit part is the time left |
-| red pulse | a meeting has started |
-| red arcs spinning fast | a service is down |
-| one red LED | someone listens on `/stream` |
+| amber rows draining from the top | a meeting starts soon; the lit rows are the time left |
+| every pixel pulsing red | a meeting has started |
+| a blinking red X | a service is down |
+| bottom-left pixel red | someone listens on `/stream` |
 
-Badge taps flash it: lime for welcome back, violet for see you, amber for an unknown badge. A new, more urgent alert starts with a sweep in its color.
+Badge taps flash it: a lime check for welcome back, a violet sweep for see you, an amber X for an unknown badge. A new, more urgent alert starts with a sweep in its color; a low battery flashes red.
 
-| Ring | ESP32-S3 |
+| Grid | ESP32-S3 |
 |---|---|
 | VCC (IN side) | 5V (USB 5V / VIN, or the boost output) |
 | GND | GND |
 | IN | 330 Ω → GPIO 18 |
 
-Install the library **Adafruit NeoPixel** (by Adafruit). Put a 100 µF capacitor across the ring's VCC and GND. **LED ring brightness** is on the settings page (default 50, 0 = off): at 50 the 16 LEDs draw about 190 mA at most, at full white 255 almost 1 A. Pin, LED count and the mic LED are in `config.h`; `LED_ENABLED 0` turns it off.
+Install the library **Adafruit NeoPixel** (by Adafruit). Put a 100 µF capacitor across the grid's VCC and GND. **LED ring brightness** is on the settings page (default 50, 0 = off): at 50 the 16 LEDs draw about 190 mA at most, at full white 255 almost 1 A. If the patterns come out turned or mirrored, set `LED_ROTATE` (0-3) or `LED_SERPENTINE` in `config.h`; `LED_ENABLED 0` turns it off.
+
+### ◢ Battery and dock
+
+The board runs from two 18650 cells (1S2P, BMS, charger, 5 V boost) and drops into a desk dock that holds it at 62° and charges it. The badge reader lives in the dock and reaches the board through pogo pins: the board finds it within 2 s of docking and lets go when you lift it out.
+
+The header shows the charge as a small battery in place of the status dot: lime, amber under 40 %, red under 15 %, cyan while docked. Below 10 % off the dock the header says `BATTERY LOW, DOCK ME` and the grid flashes red. On USB power without a pack the dot stays.
+
+Gauge wiring: **pack + → 10 kΩ → GPIO 2 → 22 kΩ → GND** (4.2 V reads 2.9 V at the pin). The microphone keeps ADC1 running continuously, so every 8th conversion reads the battery pin. `BATT_ENABLED 0` in `config.h` turns it off.
 
 ## ◢ Systems
 

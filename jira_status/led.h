@@ -1,26 +1,32 @@
 #pragma once
 #include <Arduino.h>
 
-// WS2812B ring next to the screen (LED_PIN, LED_COUNT): the HUD's alerts as light. The UI sets the
-// scene once a second; badge taps play a short notification over it.
-//   IDLE  cyan arcs going around (amber / red while the room is DISTRACTING / TOO LOUD)
+// 4x4 WS2812B grid (WCMCU-2812B-16) behind the frosted light window: the HUD's alerts as 16 soft
+// pixels. The UI sets the scene once a second; badge taps and low battery play a short notification.
+//   IDLE  an orange dot circles the edge (amber / red while the room is DISTRACTING / TOO LOUD)
 //   AWAY  violet, breathing (a presence status is set)
-//   SOON  amber arc that shrinks as the meeting gets closer
-//   LIVE  red pulse (meeting started)
-//   DOWN  red alarm arcs (a service is down)
-// Brightness: settings page (0 = off).
+//   SOON  amber rows that drain away as the meeting gets closer
+//   LIVE  every pixel pulses red (meeting started)
+//   DOWN  a red X blinks (a service is down)
+// The bottom-left pixel stays red while someone listens on /stream. Brightness: settings page (0 = off).
 enum LedScene : uint8_t { LED_IDLE, LED_AWAY, LED_SOON, LED_LIVE, LED_DOWN };  // least to most urgent
 
 // Colors tuned for the LEDs: the screen's hex values (theme.h) look washed out on WS2812s.
-#define LED_CYAN   0x00B4FF
+#define LED_ORANGE 0xFF4A00
 #define LED_LIME   0x60FF00
 #define LED_VIOLET 0x7030FF
-#define LED_AMBER  0xFF6A00
+#define LED_AMBER  0xFF8A00
 #define LED_RED    0xFF0A14
+
+// Notification shapes: one bit per pixel, bit (row * 4 + column), row 0 at the top.
+#define LED_FILL  0xFFFF
+#define LED_CHECK ((1 << 7) | (1 << 8) | (1 << 10) | (1 << 13))
+#define LED_CROSS ((1 << 0) | (1 << 3) | (1 << 5) | (1 << 6) | (1 << 9) | (1 << 10) | (1 << 12) | (1 << 15))
 
 void led_begin();
 // left: LED_SOON only, the share of the countdown still to go (1 = just started, 0 = starting now).
 // A scene more urgent than the last one starts with a sweep in its color.
 void led_scene(LedScene s, float left = 0);
-void led_mic(bool on);          // one red LED while someone listens on /stream
-void led_notify(uint32_t rgb);  // a sweep around the ring in this color (0xRRGGBB)
+void led_mic(bool on);  // the "mic is live" pixel
+// A short flash (~1.4 s): `shape` sweeps on row by row in this color (0xRRGGBB), holds, fades.
+void led_notify(uint32_t rgb, uint16_t shape = LED_FILL);

@@ -49,13 +49,18 @@
 #define SOUND_FOCUS_MAX 45        // below: FOCUS (quiet enough for deep work)
 #define SOUND_NORMAL_MAX 58       // below: NORMAL (usual office noise)
 #define SOUND_DISTRACTING_MAX 70  // below: DISTRACTING; above: TOO LOUD
-// LED ring (led.cpp): WS2812B, e.g. a 16-LED WCMCU-2812B-16. VCC to 5V, DIN through 330 ohm to LED_PIN.
+// Light window (led.cpp): 4x4 WS2812B grid (WCMCU-2812B-16). VCC to 5V, DIN through 330 ohm to LED_PIN.
 // Needs the library Adafruit NeoPixel. LED_ENABLED 0 turns it off.
 #define LED_ENABLED 1
 #define LED_PIN 18
-#define LED_COUNT 16
-#define LED_MIC_INDEX 0     // the LED that lights red while someone listens on /stream
+#define LED_ROTATE 0        // 0-3: turns the patterns 90 degrees clockwise per step, to match the mounting
+#define LED_SERPENTINE 0    // 1 if the board's odd rows run right to left
 #define LED_BRIGHTNESS 50   // default for the settings page; 16 LEDs at 50 draw ~190 mA at most
+// Battery gauge (battery.cpp): pack + -> 10k -> BATT_PIN -> 22k -> GND (4.2 V reads 2.9 V at the pin).
+// BATT_PIN must be an ADC1 pin. BATT_ENABLED 0 turns it off.
+#define BATT_ENABLED 1
+#define BATT_PIN 2
+#define BATT_RATIO ((10000.0f + 22000.0f) / 22000.0f)
 // Daily restart for a clean heap (local hour; -1 turns it off).
 #define NIGHTLY_RESTART_HOUR 4
 

@@ -16,6 +16,7 @@
 #include "sound.h"
 #include "liveview.h"
 #include "led.h"
+#include "battery.h"
 
 #if !LV_USE_TFT_ESPI || !LV_USE_CHART || !LV_FONT_MONTSERRAT_48
 #error "LVGL is using another lv_conf.h. Copy extras/lv_conf.h over Documents/Arduino/libraries/lv_conf.h"
@@ -217,6 +218,7 @@ void setup() {
   rfid_begin();
   sound_begin();
   led_begin();
+  battery_begin();
 
   String ip = WiFi.localIP().toString();
   ui_boot("Connected", "Settings: http://" + ip + "  (or http://" HOSTNAME ".local)\nUser admin, password " + gCfg.webPass);
@@ -267,6 +269,7 @@ void loop() {
   if (due != REFRESH_NONE) ui_refresh(due);
   watchWifi();
   rfid_loop();
+  battery_loop();
   // Daily restart for a clean heap (skipped in the first hour after boot, so it runs once).
   if (NIGHTLY_RESTART_HOUR >= 0 && millis() > 3600000UL) {
     time_t now = time(nullptr);

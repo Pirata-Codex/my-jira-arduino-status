@@ -9,6 +9,8 @@
 #include "sound.h"
 #include "liveview.h"
 #include "led.h"
+#include "battery.h"
+#include "rfid.h"
 
 static void freePageNow(int p);  // frees a dashboard page at once (defined with the page lifecycle)
 
@@ -32,6 +34,7 @@ static bool started = false;
 
 // header + tab bar (lv_layer_top, survive refreshes)
 static lv_obj_t *header, *hdPhrase, *hdHealth, *hdClock, *hdWifi[4], *hdDot, *hdSound;
+static lv_obj_t *hdBatt, *hdBattFill, *hdBattNub;  // battery icon, in the dot's place when a pack is measured
 static lv_obj_t *tabBar, *tabLbl[PG_COUNT], *tabLine;
 static String hdPhraseText;
 // banner (meeting / outage)
@@ -397,6 +400,13 @@ static void buildHeader() {
   lv_anim_set_playback_duration(&a, 900);
   lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
   lv_anim_start(&a);
+  hdBatt = rect(header, 160, 13, 14, 8, C_BG, 2);
+  lv_obj_set_style_border_color(hdBatt, C_MUTED, 0);
+  lv_obj_set_style_border_width(hdBatt, 1, 0);
+  hdBattFill = rect(hdBatt, 1, 1, 10, 4, C_LIME, 1);
+  hdBattNub = rect(header, 174, 15, 2, 4, C_MUTED);
+  lv_obj_add_flag(hdBatt, LV_OBJ_FLAG_HIDDEN);
+  lv_obj_add_flag(hdBattNub, LV_OBJ_FLAG_HIDDEN);
   hdPhrase = text(header, F_HUD, C_ICE, "");
   lv_obj_set_size(hdPhrase, 116, 16);  // one line: long phrases end in "..." instead of wrapping
   lv_label_set_long_mode(hdPhrase, LV_LABEL_LONG_DOT);
@@ -1828,6 +1838,21 @@ static String fridayPhrase(const struct tm& lt) {
   }
 }
 
+// Battery icon: the charge as the fill, cyan while docked (charging), amber / red when low. Without a
+// measured pack (USB power) the blinking status dot stays.
+static void renderBattery() {
+  int pct = battery_percent();
+  bool on = pct >= 0;
+  if (on) {
+    lv_obj_set_width(hdBattFill, max(1, pct / 10));
+    lv_obj_set_style_bg_color(hdBattFill, rfid_present() ? C_CYAN : pct <= 15 ? C_RED : pct <= 40 ? C_AMBER : C_LIME, 0);
+  }
+  if (on == !lv_obj_has_flag(hdBatt, LV_OBJ_FLAG_HIDDEN)) return;
+  lv_obj_t* show[] = {hdBatt, hdBattNub};
+  for (lv_obj_t* o : show) on ? lv_obj_remove_flag(o, LV_OBJ_FLAG_HIDDEN) : lv_obj_add_flag(o, LV_OBJ_FLAG_HIDDEN);
+  on ? lv_obj_add_flag(hdDot, LV_OBJ_FLAG_HIDDEN) : lv_obj_remove_flag(hdDot, LV_OBJ_FLAG_HIDDEN);
+}
+
 static void updateHeader(time_t now, const struct tm& lt) {
   char clock[8];
   strftime(clock, sizeof(clock), "%H:%M", &lt);
@@ -1845,6 +1870,7 @@ static void updateHeader(time_t now, const struct tm& lt) {
   int bars = rssi > -55 ? 4 : rssi > -65 ? 3 : rssi > -75 ? 2 : rssi > -85 ? 1 : 0;
   for (int i = 0; i < 4; i++) lv_obj_set_style_bg_color(hdWifi[i], !wifi ? C_RED : i < bars ? C_CYAN : C_DIM, 0);
   lv_obj_set_style_bg_color(hdDot, wifi ? C_LIME : C_RED, 0);
+  renderBattery();
   renderSound(false);
 }
 

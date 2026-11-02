@@ -2,6 +2,7 @@
 #include "config.h"
 #include "settings.h"
 #include "liveview.h"
+#include "battery.h"
 
 // The MAX4466 gives the sound wave around half the supply voltage. The ADC samples it all the time
 // (continuous mode: DMA, no CPU per sample) at 64 kHz; every 8 samples are averaged into one 8 kHz
@@ -11,6 +12,8 @@
 //     The calibration (settings page) shifts it so that a quiet room reads about 35-40 dB. It's an
 //     approximation of dB(A), good enough to tell a quiet office from a loud one.
 //   - the audio for the live view, only while someone listens (/stream, "Listen").
+// With the battery gauge on, every 8th conversion reads BATT_PIN instead (the ADC can't take one-off
+// reads while it runs continuously); the rate goes up by 8/7 so the audio stays at 8 kHz.
 // The level is smoothed over ~5 s for the stage, so a door slam doesn't change it, and the stage
 // only changes after moving 2 dB past a limit (no flicker at the border).
 
@@ -46,11 +49,13 @@ float sound_db() { return levelDb; }
 #endif
 
 static const int OVERSAMPLE = 8;           // ADC samples averaged into one audio sample
-static const int ADC_HZ = MIC_AUDIO_HZ * OVERSAMPLE;  // 64 kHz (the S3 goes up to 83 kHz)
+static const int ADC_HZ = MIC_AUDIO_HZ * OVERSAMPLE * (BATT_ENABLED ? 8 : 7) / 7;  // 64 / 73 kHz (S3: up to 83)
 static const int BLOCK = MIC_AUDIO_HZ / 20;  // audio samples per level window (50 ms)
 
 static adc_continuous_handle_t adc;
 static adc_channel_t channel;
+static adc_channel_t battChannel;
+static bool battOn = false;
 
 static int8_t stageFor(float db, int8_t current) {
   int8_t s = 0;
@@ -73,6 +78,7 @@ static void micTask(void*) {
   int64_t rawSum = 0, rawSq = 0;
   int rawMin = 4095, rawMax = 0;
   bool dumped = false;
+  uint32_t battSum = 0, battN = 0;
   for (;;) {
     uint32_t got = 0;
     if (adc_continuous_read(adc, raw, sizeof(raw), &got, 1000) != ESP_OK) continue;  // blocks: lets others run
@@ -87,6 +93,14 @@ static void micTask(void*) {
     bool listening = liveview_listening();
     for (uint32_t i = 0; i + SOC_ADC_DIGI_RESULT_BYTES <= got; i += SOC_ADC_DIGI_RESULT_BYTES) {
       auto* p = (adc_digi_output_data_t*)&raw[i];
+      if (battOn && MIC_UNIT_OK(p) && MIC_CHANNEL(p) == battChannel) {
+        battSum += MIC_VALUE(p);
+        if (++battN == 256) {  // ~35 times a second
+          battery_raw(battSum / battN);
+          battSum = battN = 0;
+        }
+        continue;
+      }
       if (MIC_CHANNEL(p) != channel || !MIC_UNIT_OK(p)) {
         foreign++;
         continue;
@@ -157,14 +171,22 @@ void sound_begin() {
   adc_continuous_handle_cfg_t hc = {};
   hc.max_store_buf_size = 4096;
   hc.conv_frame_size = 1024;
-  adc_digi_pattern_config_t pat = {};
-  pat.atten = ADC_ATTEN_DB_12;
-  pat.channel = channel;
-  pat.unit = ADC_UNIT_1;
-  pat.bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+  // Seven microphone conversions, then one of the battery (when its pin is an ADC1 pin).
+#if BATT_ENABLED
+  adc_unit_t battUnit;
+  battOn = adc_continuous_io_to_channel(BATT_PIN, &battUnit, &battChannel) == ESP_OK && battUnit == ADC_UNIT_1;
+#endif
+  adc_digi_pattern_config_t pat[8] = {};
+  int patN = battOn ? 8 : 1;
+  for (int i = 0; i < patN; i++) {
+    pat[i].atten = ADC_ATTEN_DB_12;
+    pat[i].channel = i == 7 ? battChannel : channel;
+    pat[i].unit = ADC_UNIT_1;
+    pat[i].bit_width = SOC_ADC_DIGI_MAX_BITWIDTH;
+  }
   adc_continuous_config_t cfg = {};
-  cfg.pattern_num = 1;
-  cfg.adc_pattern = &pat;
+  cfg.pattern_num = patN;
+  cfg.adc_pattern = pat;
   cfg.sample_freq_hz = ADC_HZ;
   cfg.conv_mode = ADC_CONV_SINGLE_UNIT_1;
   cfg.format = MIC_FORMAT;
