@@ -207,6 +207,7 @@ USB is needed **once**. After that, update over WiFi:
 | `/` | settings |
 | `/refresh` | fetch everything now |
 | `/memory` | memory budget: estimate vs measured per feature, room right now |
+| `/log` | the last ~3 KB of the log, lines from before the last restart included (the boot line says why it restarted, e.g. brownout or crash) |
 | `/screenshot` | the screen as a 480×320 BMP (redrawn once and streamed, no extra RAM) |
 | `/stream` | live view: the screen as it draws, the room sound level with a 2-minute graph, and **Listen** for the room audio (ESP32-S3 with PSRAM) |
 | `/stream.raw` | the data `/stream` draws: changed rectangles (RGB565), the sound level once a second, and with `?audio=1` the microphone (8 kHz, 16-bit) |

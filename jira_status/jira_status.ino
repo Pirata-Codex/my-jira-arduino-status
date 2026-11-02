@@ -143,7 +143,11 @@ void setup() {
   Serial.begin(115200);
   delay(200);
   Serial.println();
-  LOG("boot, reset reason %d, loop stack %u", (int)esp_reset_reason(), (unsigned)getArduinoLoopTaskStackSize());
+  static const char* const REASONS[] = {"unknown", "power on", "reset pin", "restart", "crash", "interrupt watchdog",
+                                        "task watchdog", "watchdog", "deep sleep", "brownout (power dip)", "SDIO"};
+  int reason = (int)esp_reset_reason();
+  LOG("---- boot, reset reason %d: %s, loop stack %u", reason, reason >= 0 && reason <= 10 ? REASONS[reason] : "other",
+      (unsigned)getArduinoLoopTaskStackSize());
   settings_load();
   model_init();
 

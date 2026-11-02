@@ -205,7 +205,7 @@ static void handleRoot() {
   h += String("<label><input type=checkbox name=hideDone value=1 style='display:inline;width:auto'") +
        (gCfg.hideDone ? " checked" : "") + "> Hide Done cards</label>";
   h += field("webPass", "Page password (user admin)", "", "Leave empty to keep the current one", "password");
-  h += F("<button>Save</button></form><p><a href=/update>Firmware update</a></p>");
+  h += F("<button>Save</button></form><p><a href=/log>Log</a> · <a href=/update>Firmware update</a></p>");
   server.send(200, "text/html", h);
 }
 
@@ -282,6 +282,12 @@ void web_begin() {
     server.send(200, "text/html", "<meta name=viewport content='width=device-width'><style>body{font-family:sans-serif;margin:16px}"
                 "td,th{padding:3px 8px;border-bottom:1px solid #ddd;text-align:left}</style>" + mem_report_html() +
                 "<p><a href='/'>Settings</a></p>");
+  });
+  // The log, the lines before the last reset included (logbuf.cpp).
+  server.on("/log", HTTP_GET, [] {
+    if (!auth()) return;
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(200, "text/plain; charset=utf-8", logbuf_text());
   });
   server.on("/screenshot", HTTP_GET, [] {
     if (!auth()) return;

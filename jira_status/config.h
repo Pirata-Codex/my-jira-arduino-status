@@ -1,4 +1,5 @@
 #pragma once
+#include <Arduino.h>
 #include <esp_heap_caps.h>  // LOG
 
 #define FRIDAY_VERSION "1.0.0"
@@ -73,8 +74,11 @@
 // When today's meetings run out, the agenda shows the next ones from this many days ahead.
 #define AGENDA_AHEAD_DAYS 7
 
-// Serial log (115200 baud): timestamp, free heap and largest free block on every line. Byte-addressable
-// RAM only: ESP.getFreeHeap() also counts ~36 KB of IRAM that neither LVGL nor TLS can use.
-#define LOG(fmt, ...) Serial.printf("[%7lu] heap %3uk blk %3uk | " fmt "\n", millis(), \
+// Log: timestamp, free heap and largest free block on every line. Byte-addressable RAM only:
+// ESP.getFreeHeap() also counts ~36 KB of IRAM that neither LVGL nor TLS can use. Goes to Serial
+// (115200 baud) and to the page /log, which keeps the lines from before the last reset (logbuf.cpp).
+void logbuf_printf(const char* fmt, ...) __attribute__((format(printf, 1, 2)));
+String logbuf_text();  // the ring buffer, oldest line first
+#define LOG(fmt, ...) logbuf_printf("[%7lu] heap %3uk blk %3uk | " fmt "\n", millis(), \
     (unsigned)(heap_caps_get_free_size(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024), \
     (unsigned)(heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) / 1024), ##__VA_ARGS__)
