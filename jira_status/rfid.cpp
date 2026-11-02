@@ -42,14 +42,19 @@ static bool answers() {
 }
 
 // Every 2 s: a missing reader is looked for again (the board was docked), a present one is asked
-// for its version (the board was lifted out).
+// for its version (the board was lifted out). A power dip resets the reader to its defaults, antenna
+// off: it still answers but never sees a badge, so a reader with the antenna off is set up again.
 static void checkReader() {
   if (lastCheck && millis() - lastCheck < 2000) return;
   lastCheck = millis();
   if (present) {
-    if (answers()) return;
-    present = false;
-    LOG("rfid: reader gone (undocked)");
+    if (!answers()) {
+      present = false;
+      LOG("rfid: reader gone (undocked)");
+    } else if ((reader.PCD_ReadRegister(MFRC522::TxControlReg) & 0x03) != 0x03) {
+      reader.PCD_Init();
+      LOG("rfid: reader reset itself (power dip?), set up again");
+    }
     return;
   }
   reader.PCD_Init();
