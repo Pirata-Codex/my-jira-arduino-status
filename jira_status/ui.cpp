@@ -1752,7 +1752,7 @@ static void collectAlerts(time_t now) {
   }
 }
 
-// Light window: the most urgent alert, else dark.
+// Light window: the most urgent alert, else the room and the status corners.
 static void updateLeds() {
   bool down = false, live = false;
   for (int i = 0; i < alertCount; i++) {
@@ -1763,6 +1763,20 @@ static void updateLeds() {
   else if (live) led_scene(LED_LIVE);
   else if (soonSec >= 0) led_scene(LED_SOON, (float)soonSec / MEETING_SOON_SEC);
   else led_scene(LED_IDLE);
+
+  int pct = battery_percent();
+  bool docked = rfid_present();
+  uint8_t st = 0;
+  if (curStatus != ST_NONE) st |= LED_ST_AWAY;
+  if (liveview_listening()) st |= LED_ST_MIC;
+  if (pct >= 0 && docked) st |= pct >= 95 ? LED_ST_FULL : LED_ST_CHARGING;
+  if (pct >= 0 && !docked && pct <= 15) st |= LED_ST_LOWBATT;
+  if (WiFi.status() != WL_CONNECTED) st |= LED_ST_NOWIFI;
+  led_status(st);
+  // Put in the dock: the charge for a moment, one lime row per quarter.
+  static bool wasDocked = false;
+  if (docked && !wasDocked && pct >= 0) led_notify(LED_LIME, LED_ROWS[constrain((pct + 24) / 25, 1, 4) - 1]);
+  wasDocked = docked;
 }
 
 static void updateBanner(time_t now) {

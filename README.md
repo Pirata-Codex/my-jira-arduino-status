@@ -116,16 +116,20 @@ Install the library **MFRC522** (by GithubCommunity). Tap an unknown badge once:
 
 ### ◢ Light window (4×4 WS2812B)
 
-A 4×4 grid (WCMCU-2812B-16) behind a frosted cover beside the screen. It stays dark while all is fine, so any light means "look at the screen":
+A 4×4 grid (WCMCU-2812B-16) behind a frosted cover beside the screen. Each area has one job, so you can read it from across the room:
 
-| Grid | Meaning |
-|---|---|
-| dark | all fine |
-| amber, filling up from the bottom | a meeting starts soon; full = it starts now (one pixel ≈ 19 s of the last 5 minutes) |
-| every pixel pulsing red | a meeting has started |
-| a blinking red X | a service is down |
+| Where | Light | Meaning |
+|---|---|---|
+| whole grid | amber, filling up from the bottom | a meeting starts soon; full = it starts now (one pixel ≈ 19 s of the last 5 minutes) |
+| whole grid | every pixel pulsing red | a meeting has started |
+| whole grid | a blinking red X | a service is down |
+| middle 2×2 | amber / red pulsing | the room is distracting / too loud |
+| top-left | violet | a presence status is set (WFH, on the way, left, away) |
+| top-right | red | someone listens on `/stream` |
+| bottom-left | lime breathing / lime / red blinking | charging in the dock / full / battery low |
+| bottom-right | cyan blinking | no WiFi |
 
-Short flashes: a lime check for welcome back, violet for see you, an amber X for an unknown badge, the bottom row red for a low battery. A new alert starts with a sweep in its color.
+The middle and the corners show only while no alert fills the grid; with nothing to say the grid is dark. Quick flashes mean something just happened: a lime check for welcome back, violet for see you, an amber X for an unknown badge, lime rows for the charge when you dock it (one row per quarter), the bottom row red for a low battery, and a sweep in its color when a new alert starts.
 
 | Grid | ESP32-S3 |
 |---|---|

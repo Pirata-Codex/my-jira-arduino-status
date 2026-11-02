@@ -1,6 +1,7 @@
 #include "led.h"
 #include "config.h"
 #include "settings.h"
+#include "sound.h"
 
 // A task on core 0 draws the grid 50 times a second, so the light keeps moving while loop() is busy
 // with an HTTPS refresh. Everything it reads is set from other tasks as single values.
@@ -12,6 +13,7 @@ static const int N = 4;  // 4 x 4
 static Adafruit_NeoPixel grid(N * N, LED_PIN, NEO_GRB + NEO_KHZ800);
 static volatile uint8_t scene = LED_IDLE;
 static volatile float soonLeft = 1;
+static volatile uint8_t status = 0;
 static volatile uint32_t notifyColor = 0, notifyAt = 0;  // notifyAt 0: no notification
 static volatile uint16_t notifyShape = LED_FILL;
 
@@ -51,6 +53,26 @@ static void soon(float t) {
       float k = n < (int)lit ? 0.8f : n == (int)lit ? 0.1f + 0.6f * breathe(t, 2) : 0;
       put(r, c, LED_AMBER, k);
     }
+}
+
+// No alert: dark, but for the room in the middle and the status lights in the corners.
+static void idle(float t) {
+  grid.clear();
+  SoundStage st = sound_stage();
+  if (st == SND_DISTRACTING || st == SND_TOO_LOUD) {
+    bool loud = st == SND_TOO_LOUD;
+    float k = loud ? 0.25f + 0.75f * breathe(t, 1) : 0.3f + 0.2f * breathe(t, 3);
+    for (int r = 1; r < 3; r++)
+      for (int c = 1; c < 3; c++) put(r, c, loud ? LED_RED : LED_AMBER, k);
+  }
+  uint8_t s = status;
+  bool blink = fmodf(t, 1) < 0.5f;
+  if (s & LED_ST_AWAY) put(0, 0, LED_VIOLET, 0.6f);
+  if (s & LED_ST_MIC) put(0, N - 1, LED_RED, 0.8f);
+  if (s & LED_ST_LOWBATT) put(N - 1, 0, LED_RED, blink ? 0.8f : 0);
+  else if (s & LED_ST_FULL) put(N - 1, 0, LED_LIME, 0.6f);
+  else if (s & LED_ST_CHARGING) put(N - 1, 0, LED_LIME, 0.1f + 0.6f * breathe(t, 3));
+  if (s & LED_ST_NOWIFI) put(N - 1, N - 1, LED_CYAN, blink ? 0.7f : 0);
 }
 
 static void cross(float t) {
@@ -98,7 +120,7 @@ static void ledTask(void*) {
         case LED_SOON: soon(t); break;
         case LED_LIVE: fill(LED_RED, 0.15f + 0.85f * breathe(t, 1.4f)); break;
         case LED_DOWN: cross(t); break;
-        default: grid.clear();
+        default: idle(t);
       }
     }
     grid.show();
@@ -122,6 +144,8 @@ void led_scene(LedScene s, float left) {
   scene = s;
 }
 
+void led_status(uint8_t flags) { status = flags; }
+
 void led_notify(uint32_t rgb, uint16_t shape) {
   notifyColor = rgb;
   notifyShape = shape;
@@ -130,5 +154,6 @@ void led_notify(uint32_t rgb, uint16_t shape) {
 #else
 void led_begin() {}
 void led_scene(LedScene, float) {}
+void led_status(uint8_t) {}
 void led_notify(uint32_t, uint16_t) {}
 #endif
