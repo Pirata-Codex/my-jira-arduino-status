@@ -15,6 +15,7 @@
 static MFRC522 reader(RFID_SS, RFID_RST);
 static bool present = false;
 static uint32_t lastPoll = 0, lastTap = 0, lastCheck = 0;
+static uint32_t resets = 0, lastResetLog = 0;
 static String lastUid;
 
 static String uidHex(const MFRC522::Uid& u) {
@@ -35,6 +36,15 @@ static bool isMine(const String& uid) {
   return (list.length() && ("," + list + ",").indexOf("," + uid + ",") >= 0);
 }
 
+// The library pulls RST high only when it finds the reader powered down, then leaves the pin an
+// input: the line floats, and on the boost's noise (through the pogo pins) it resets the reader again
+// and again. Drive it high for good.
+static void initReader() {
+  reader.PCD_Init();
+  pinMode(RFID_RST, OUTPUT);
+  digitalWrite(RFID_RST, HIGH);
+}
+
 // A reader that isn't there answers 0x00 or 0xFF (MISO is pulled up, so an open pogo pin reads 0xFF).
 static bool answers() {
   byte v = reader.PCD_ReadRegister(MFRC522::VersionReg);
@@ -52,12 +62,16 @@ static void checkReader() {
       present = false;
       LOG("rfid: reader gone (undocked)");
     } else if ((reader.PCD_ReadRegister(MFRC522::TxControlReg) & 0x03) != 0x03) {
-      reader.PCD_Init();
-      LOG("rfid: reader reset itself (power dip?), set up again");
+      initReader();
+      resets++;
+      if (!lastResetLog || millis() - lastResetLog > 60000) {  // at most once a minute
+        LOG("rfid: reader reset itself (power dip?), set up again; %u times so far", (unsigned)resets);
+        lastResetLog = millis();
+      }
     }
     return;
   }
-  reader.PCD_Init();
+  initReader();
   if (!answers()) return;
   present = true;
   LOG("rfid: reader found (docked), version 0x%02X", reader.PCD_ReadRegister(MFRC522::VersionReg));
